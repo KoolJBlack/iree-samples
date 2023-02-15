@@ -19,7 +19,7 @@ from iree.runtime.benchmark import BenchmarkResult
 import iree.runtime as ireert
 import iree.compiler as ireec
 
-from config_generation import Pipeline, OperationType, DataType, generate_configs
+from config_generation import Pipeline, OperationType, DataType, generate_configs, dump_shark_config_json
 
 # ====== IREE Specific ======
 
@@ -46,30 +46,33 @@ def create_context() -> ir.Context:
 
 
 def annotate_mlir_model(
-        input_model_path: Optional[Path],
-        input_config_path: Path,
-        annotated_model_output_path: Optional[Path]) -> ir.Module:
-    """"Annotate model from with config and save to path. Returns annotated IREE Model."""
+        input_model_str: str,
+        config_path: Path,
+        annotated_model_output_path: Optional[Path] = None) -> ir.Module:
+    """"Annotate model from with config. 
+    
+    Configs are consumed form a Path.
+    
+    Returns annotated IREE Model."""
 
-    print(f"Input model path: {input_model_path}")
     search_op = "matmul"
     with create_context() as ctx:
         annotated_model = model_annotation(
             ctx=None,
-            input_contents=input_model_path,
-            config_path=input_config_path,
+            input_contents=input_model_str,
+            config_path=config_path,
             search_op=search_op,
         )
 
         mlir_str = str(annotated_model)
-        print(f"The resulting IR:")
-        print(annotated_model)
-        print(f"Module type {type(annotated_model)}")
+        # print(f"The resulting IR:")
+        # print(annotated_model)
+        # print(f"Module type {type(annotated_model)}")
 
         if annotated_model_output_path:
             with open(annotated_model_output_path, "w") as f:
                 f.write(mlir_str)
-            print(f"Saved mlir in {annotated_model_output_path}.")
+            print(f"Saved annotated mlir to: {annotated_model_output_path}.")
 
         return annotated_model
 
@@ -154,9 +157,9 @@ def parse_arguments():
                         required=False)
     parser.add_argument("--target_backend", type=TargetBackend,
                         help="Select target backend. Only `cuda` is supported at the moment", required=False, default=TargetBackend.CUDA)
-    parser.add_argument("--input_mlir_model",
-                        type=str,
-                        help="Path to input .mlir file",
+    parser.add_argument("--template_mlir_model",
+                        type=Path,
+                        help="Path to input .mlir for profiling. Used as input to annotation and compilation. Args for dimensions and datatype must match.",
                         required=False,
                         default="/usr/local/google/home/kooljblack/Code/iree-tmp/batch_size/search/benchmark-tensorcore-input.mlir")
     parser.add_argument("--artifacts_dir",
@@ -169,18 +172,11 @@ def parse_arguments():
                         help="Extra arguments to be added to compilation",
                         required=False,
                         default=[])
-    parser.add_argument(
-        "--module_path",
-        type=str,
-        help="Module path (typically .vmfb) to be referenced in the output trace. Should match the output path of the iree-compile command generating the module.",
-        required=False)
     return parser.parse_args()
-
-                        # choices=["i8", "f32", "f16"],
 
 
 def main(args: argparse.ArgumentParser):
-    print("Run Model Annotation Start")
+    print("Profiler Start")
 
     # Setup temporary dir for artifacts
     temp_dir = None
@@ -191,42 +187,57 @@ def main(args: argparse.ArgumentParser):
         temp_dir = tempfile.TemporaryDirectory()
         artifacts_dir_path = Path(temp_dir.name)
 
-    input_config_path = artifacts_dir_path.joinpath("config.json")
+    # Paths needed
     annotated_model_path = artifacts_dir_path.joinpath("annotated-model.mlir")
+    generated_config_path = artifacts_dir_path.joinpath("generated_config.json")
     vmfb_path = artifacts_dir_path.joinpath("annotated_flatbuffer.vmfb")
+    
+    # Load template model
+    input_model_path = args.template_mlir_model
+    template_model_str =""
+    with open(input_model_path, "r") as f:
+        template_model_str = f.read()
 
-    input_model_path = Path(args.input_mlir_model)
+    if not template_model_str:
+        raise ValueError("Unable to read tempalte model.")
 
-    # Config Generation (TBD)
-    # configs = generate_configs(pipeline=Pipeline.GPU_TENSORCORE, operation=OperationType.MATMUL, input_shape=[
-    #                            args.m, args.n, args.k], data_type=args.data_type)
-    # print(f"Generated config count: {len(configs)}")
+    configs = generate_configs(pipeline=Pipeline.GPU_TENSORCORE, operation=OperationType.MATMUL, input_shape=[
+                               args.m, args.n, args.k], data_type=args.data_type)
+    print(f"Generated configs for model: {len(configs)}")
 
-    # Annotate model with predefined config
+    profiler_results = []
+    # For each config, annotate the model, compile and benchmark
     # Configs need to be saved to file for use. 
     # generated_config_path = artifacts_dir_path.joinpath("generated_config.json")
+    for index, config in enumerate(configs):
+        print(f"Testing config {index}/{len(configs)}")
 
-    annotated_module = annotate_mlir_model(
-        input_model_path, input_config_path, annotated_model_path)
+        # Save the config to file
+        print(f"Saved generated config to: {generated_config_path}.")
+        # with open(generated_config_path, "wb") as f:
+        #     f.write(flatbuffer_blob)
+        bytes_written = dump_shark_config_json(config, generated_config_path)
+        annotated_module = annotate_mlir_model(
+            input_model_str=template_model_str, config_path=generated_config_path)
 
-    # Compile model
-    flatbuffer_blob = compile_module_to_flatbuffer(
-        str(annotated_module), "cuda", "mhlo", args.extra_compilation_args)
+        # Compile model
+        flatbuffer_blob = compile_module_to_flatbuffer(
+            str(annotated_module), "cuda", "mhlo", args.extra_compilation_args)
 
-    # Was compilation successful?
-    if not flatbuffer_blob:
-        print("Failed to compile. Exiting!")
-        sys.exit()
-    print(f"The compiled flatbuffer is {len(flatbuffer_blob)} bytes")
+        # # Was compilation successful?
+        # if not flatbuffer_blob:
+        #     print("Failed to compile. Exiting!")
+        #     sys.exit()
+        # print(f"The compiled flatbuffer is {len(flatbuffer_blob)} bytes")
 
-    print(f"Saved vmfb in {vmfb_path}.")
-    with open(vmfb_path, "wb") as f:
-        f.write(flatbuffer_blob)
+        # print(f"Saved vmfb in {vmfb_path}.")
+        # with open(vmfb_path, "wb") as f:
+        #     f.write(flatbuffer_blob)
 
-    benchmark_results = run_benchmark_module(flatbuffer_blob, entry_function="forward")
+        # benchmark_results = run_benchmark_module(flatbuffer_blob, entry_function="forward")
 
-    print(
-        f"I reached the end with these many results: {len(benchmark_results)}!")
+        # print(
+        #     f"I reached the end with these many results: {len(benchmark_results)}!")
 
     # Cleanup any artifacts
     if temp_dir:
