@@ -42,15 +42,6 @@ class DataType(enum.Enum):
         except KeyError:
             raise ValueError()
 
-# Inputs
-# Shape
-# Datatype
-
-# Output
-# Workgroupo Size
-# Tile Size
-# Pipeline depth
-
 def generate_tile_sizes(pipeline: Pipeline, input_shape: List[int]) -> List[List[int]]:
     """"Returns list of possible tile sizes for input shape and pipeline"""
     tile_sizes = []
