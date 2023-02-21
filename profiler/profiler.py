@@ -8,9 +8,14 @@ import enum
 import dataclasses
 import tempfile
 from pathlib import Path
-from typing import Optional, List
+from typing import Optional, List, Tuple
 import csv
 from datetime import date, datetime
+import concurrent.futures
+import json
+from itertools import zip_longest
+
+
 
 from model_annotation import model_annotation
 
@@ -163,7 +168,7 @@ def create_context() -> ir.Context:
 
 def annotate_mlir_model(
         input_model_str: str,
-        config_path: Path,
+        config_json: str,
         annotated_model_output_path: Optional[Path] = None) -> ir.Module:
     """"Annotate model from with config. 
     Configs are consumed form a Path.
@@ -174,7 +179,7 @@ def annotate_mlir_model(
         annotated_model = model_annotation(
             ctx=None,
             input_contents=input_model_str,
-            config_path=config_path,
+            input_configs=[config_json],
             search_op=search_op,
         )
 
@@ -302,10 +307,57 @@ def parse_arguments():
                         help="Number of iterations for each dispatch in benchmark",
                         required=False,
                         default=1000)
+    parser.add_argument("--compilation_parallelism",
+                        type=int,
+                        help="Number of simultaneous compilations to run. Default=1",
+                        required=False,
+                        default=1)
     return parser.parse_args()
+
+def annotate_and_compile(
+    configs: List[dict], 
+    template_model_str: str,
+    generated_config_path: Path,
+    benchmark_dispatch_batch_size: int, 
+    extra_compilation_args: List,
+    parallel_threads: int = 1) -> List[Tuple[dict, bytes, Optional[str]]]:
+   
+    def thread_compile(config):
+        print(f"Annotating and compiling config: {config}")
+        # Save the config to file
+        # print(f"Saved generated config to: {generated_config_path}.")
+        # bytes_written = dump_shark_config_json(config, generated_config_path)
+        annotated_model = annotate_mlir_model(
+            input_model_str=template_model_str, config_json=json.dumps(config))
+
+        # Compile model
+        flatbuffer_blob, err = compile_module_to_flatbuffer(
+            str(annotated_model), "cuda", "mhlo", benchmark_dispatch_batch_size, extra_compilation_args)
+        
+        return (config, flatbuffer_blob, err)
+
+    results = []
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=parallel_threads) as executor:
+        future_to_config = {executor.submit(thread_compile, config): config for config in configs}
+        completed_futures, failed_futures = concurrent.futures.wait(future_to_config)
+         
+        if failed_futures:
+            raise Exception("Failed future from compilation")
+
+        for future in completed_futures:
+            config = future_to_config[future]
+            try:
+                results.append(future.result())
+            except Exception as exc:
+                print('%r generated an exception: %s' % (config, exc))
+        
+    return results
 
 def main(args: argparse.ArgumentParser):
     print(f"Profiling shape [{args.m},{args.n},{args.k}] on {args.target_backend} for optimal config.")
+
+    compilation_parallelism = args.compilation_parallelism
 
     # Setup temporary dir for artifacts
     temp_dir = None
@@ -350,45 +402,55 @@ def main(args: argparse.ArgumentParser):
     print(f"Generated configs for model: {len(configs)}")
 
     profiler_results = []
-    # For each config, annotate the model, compile and benchmark
-    # Configs need to be saved to file for use.
-    for index, config in enumerate(configs[0:10]):
-        print(f"Testing config {index}/{len(configs)} : {config}")
 
-        # Save the config to file
-        print(f"Saved generated config to: {generated_config_path}.")
-        bytes_written = dump_shark_config_json(config, generated_config_path)
-        annotated_module = annotate_mlir_model(
-            input_model_str=template_model_str, config_path=generated_config_path)
+    iter_configs = [iter(configs)] * compilation_parallelism
+    grouped_configs = zip_longest(fillvalue=None, *iter_configs)
 
-        # Compile model
-        flatbuffer_blob, err = compile_module_to_flatbuffer(
-            str(annotated_module), "cuda", "mhlo", benchmark_dispatch_batch_size, args.extra_compilation_args)
+    for group_index, config_group in enumerate(grouped_configs):
+        for index, config in enumerate(config_group):
+            true_index = group_index * compilation_parallelism + index
+            print(f"Testing config {true_index}/{len(configs)} : {config}")
 
-        # Was compilation successful?
-        if not flatbuffer_blob:
-            print("Failed to compile!")
+        # For each config, annotate the model, compile and benchmark
+
+        # Grab up to parallel configs:
+        # sub function for compiling all and returning the models/results as a dict to config
+        # Then run through each 
+
+        # config, flatbuffer_blob, err = annotate_and_compile(
+        compilation_results = annotate_and_compile(
+            config_group,
+            template_model_str, 
+            generated_config_path,
+            benchmark_dispatch_batch_size, 
+            args.extra_compilation_args,
+            compilation_parallelism)
+
+        for config, flatbuffer_blob, err in compilation_results:        
+            # Was compilation successful?
+            if not flatbuffer_blob:
+                print("Failed to compile!")
+                profiler_results.append(
+                    ProfilerResult.create_failed_compilation(config, err))
+                benchmark_results_writer.write_csv_result(profiler_results[-1])
+                continue
+            
+            # Benchmark model
+            benchmark_results = run_benchmark_module(flatbuffer_blob, entry_function="forward",
+                                                    benchmark_repetitions=benchmark_repetitions, benchmark_dispatch_batch_size=benchmark_dispatch_batch_size)
+
+            # Was benchmark successful?
+            if not benchmark_results:
+                print("Failed to benchmark!")
+                profiler_results.append(
+                    ProfilerResult.create_failed_benchmark(config))
+                benchmark_results_writer.write_csv_result(profiler_results[-1])
+
+                continue
+
             profiler_results.append(
-                ProfilerResult.create_failed_compilation(config, err))
+                ProfilerResult.create_with_result(config, benchmark_results))
             benchmark_results_writer.write_csv_result(profiler_results[-1])
-            continue
-        
-        # Benchmark model
-        benchmark_results = run_benchmark_module(flatbuffer_blob, entry_function="forward",
-                                                 benchmark_repetitions=benchmark_repetitions, benchmark_dispatch_batch_size=benchmark_dispatch_batch_size)
-
-        # Was benchmark successful?
-        if not benchmark_results:
-            print("Failed to benchmark!")
-            profiler_results.append(
-                ProfilerResult.create_failed_benchmark(config))
-            benchmark_results_writer.write_csv_result(profiler_results[-1])
-
-            continue
-
-        profiler_results.append(
-            ProfilerResult.create_with_result(config, benchmark_results))
-        benchmark_results_writer.write_csv_result(profiler_results[-1])
 
     print(f"Produced {len(profiler_results)} profile results.")
 

@@ -38,7 +38,7 @@ def model_annotation(
     ctx: ir.Context,
     *,
     input_contents: str,
-    config_path: str,
+    input_configs: List[str],
     search_op: str,
     winograd: bool = False,
 ):
@@ -47,15 +47,17 @@ def model_annotation(
             input_contents = f.read()
     module = ir.Module.parse(input_contents)
 
-    if config_path == "":
-        return module
+    # if config_path == "":
+    #     return module
 
-    if winograd:
-        with open(config_path, "r") as f:
-            data = json.load(f)
-            configs = data["c,f"]
-    else:
-        configs = load_model_configs(config_path)
+    # if winograd:
+    #     with open(config_path, "r") as f:
+    #         data = json.load(f)
+    #         configs = data["c,f"]
+    # else:
+    #     configs = load_model_configs(config_path)
+
+    configs = load_model_configs(input_configs)
 
     # The Python API does not expose a general walk() function, so we just
     # do it ourselves.
@@ -67,38 +69,38 @@ def model_annotation(
     return module
 
 
-def load_model_configs(config_path: str):
+def load_model_configs(input_configs: List[str]):
     config = {}
-    with open(config_path, "r") as f:
-        for line in f:
-            data = json.loads(line)
+    # with open(config_path, "r") as f:
+    for line in input_configs:
+        data = json.loads(line)
 
-            if "identifier" not in data.keys():
-                continue
-            if data["identifier"] == "matmul":
-                matrix_size = [data["m"], data["n"], data["k"]]
-            elif data["identifier"] == "bmm":
-                matrix_size = [data["b"], data["m"], data["n"], data["k"]]
-            elif data["identifier"] == "generic":
-                matrix_size = [1, data["b"], data["m"], data["n"], data["k"]]
-            elif data["identifier"] == "conv":
-                matrix_size = [
-                    data["n"],
-                    data["ih"],
-                    data["iw"],
-                    data["c"],
-                    data["kh"],
-                    data["kw"],
-                    data["f"],
-                    data["oh"],
-                    data["ow"],
-                    data["d"],
-                    data["s"],
-                    data["p"],
-                ]
-            config[shape_list_to_string(matrix_size)] = data
-        f.close()
-        return config
+        if "identifier" not in data.keys():
+            continue
+        if data["identifier"] == "matmul":
+            matrix_size = [data["m"], data["n"], data["k"]]
+        elif data["identifier"] == "bmm":
+            matrix_size = [data["b"], data["m"], data["n"], data["k"]]
+        elif data["identifier"] == "generic":
+            matrix_size = [1, data["b"], data["m"], data["n"], data["k"]]
+        elif data["identifier"] == "conv":
+            matrix_size = [
+                data["n"],
+                data["ih"],
+                data["iw"],
+                data["c"],
+                data["kh"],
+                data["kw"],
+                data["f"],
+                data["oh"],
+                data["ow"],
+                data["d"],
+                data["s"],
+                data["p"],
+            ]
+        config[shape_list_to_string(matrix_size)] = data
+    # f.close()
+    return config
 
 
 def walk_children(
