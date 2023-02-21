@@ -1,22 +1,16 @@
 #!/usr/bin/env python3
 
 import os
-import sys
-import subprocess
 import argparse
 import enum
-import dataclasses
 import tempfile
 from pathlib import Path
 from typing import Optional, List, Tuple
 import csv
-from datetime import date, datetime
+from datetime import datetime
 import concurrent.futures
 import json
 from itertools import zip_longest
-
-
-
 from model_annotation import model_annotation
 
 from iree.compiler import ir, CompilerToolError
@@ -72,6 +66,7 @@ class ProfilerResult:
     def create_failed_benchmark(config: dict):
         return ProfilerResult(config, True, False, None)
 
+
 class ProfilerResultsWriter:
     """Class for writing benchmark results to CSV."""
 
@@ -126,9 +121,9 @@ class ProfilerResultsWriter:
         if not profiler_result.compilation_successful:
             err = profiler_result.compiler_error
         if not profiler_result.benchmark_successful:
-            #TODO: capture error
+            # TODO: capture error
             err = "Failed to benchmark."
-        else: 
+        else:
             # Pull key benchmark metrics
             benchmark_results = profiler_result.benchmark_results
             benchmark_result_mean = benchmark_results[-4]
@@ -152,11 +147,10 @@ class ProfilerResultsWriter:
                 "cpu_time_cv": benchmark_result_cv.cpu_time,
             })
         bench_result.update({"error": err})
-        
+
         with open(self.output_csv_path, mode="a", newline="") as csv_f:
             writer = csv.DictWriter(csv_f, fieldnames=self.field_names)
             writer.writerow(bench_result)
-
 
 
 def create_context() -> ir.Context:
@@ -233,15 +227,56 @@ def compile_module_to_flatbuffer(
     return flatbuffer_blob, None
 
 
+def annotate_and_compile(
+        configs: List[dict],
+        template_model_str: str,
+        benchmark_dispatch_batch_size: int,
+        extra_compilation_args: List,
+        parallel_threads: int = 1) -> List[Tuple[dict, bytes, Optional[str]]]:
+    """Parallel annotation and compiling for models."""
+
+    def thread_compile(config):
+        print(f"Annotating and compiling config: {config}")
+        annotated_model = annotate_mlir_model(
+            input_model_str=template_model_str, config_json=json.dumps(config))
+
+        # Compile model
+        flatbuffer_blob, err = compile_module_to_flatbuffer(
+            str(annotated_model), "cuda", "mhlo", benchmark_dispatch_batch_size, extra_compilation_args)
+
+        return (config, flatbuffer_blob, err)
+
+    results = []
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=parallel_threads) as executor:
+        future_to_config = {executor.submit(
+            thread_compile, config): config for config in configs}
+        completed_futures, failed_futures = concurrent.futures.wait(
+            future_to_config)
+
+        if failed_futures:
+            raise Exception("Failed future from compilation")
+
+        for future in completed_futures:
+            config = future_to_config[future]
+            try:
+                results.append(future.result())
+            except Exception as exc:
+                print('%r generated an exception: %s' % (config, exc))
+
+    return results
+
+
 def run_benchmark_module(
         flatbuffer_blob: bytes,
         entry_function: str,
         function_input: List[str] = [],
         device: str = "cuda",
+        driver: str = "cuda",
         benchmark_repetitions: Optional[int] = None,
         benchmark_dispatch_batch_size: Optional[int] = None) -> List[BenchmarkResult]:
     # Create a module
-    config = ireert.Config(driver_name="cuda")
+    config = ireert.Config(driver_name=driver)
     vm_module = ireert.VmModule.from_flatbuffer(
         config.vm_instance, flatbuffer_blob)
     funcs = [a for a in vm_module.function_names if a != "__init"]
@@ -263,7 +298,8 @@ def dir_path(string) -> Optional[Path]:
 
 
 def parse_arguments():
-    parser = argparse.ArgumentParser(description="Profiler for tuning dispatches in IREE")
+    parser = argparse.ArgumentParser(
+        description="Profiler for tuning dispatches in IREE")
     parser.add_argument(
         "--m", type=int, help="m dim for matmul", required=False, default=4096)
     parser.add_argument(
@@ -314,48 +350,10 @@ def parse_arguments():
                         default=1)
     return parser.parse_args()
 
-def annotate_and_compile(
-    configs: List[dict], 
-    template_model_str: str,
-    generated_config_path: Path,
-    benchmark_dispatch_batch_size: int, 
-    extra_compilation_args: List,
-    parallel_threads: int = 1) -> List[Tuple[dict, bytes, Optional[str]]]:
-   
-    def thread_compile(config):
-        print(f"Annotating and compiling config: {config}")
-        # Save the config to file
-        # print(f"Saved generated config to: {generated_config_path}.")
-        # bytes_written = dump_shark_config_json(config, generated_config_path)
-        annotated_model = annotate_mlir_model(
-            input_model_str=template_model_str, config_json=json.dumps(config))
-
-        # Compile model
-        flatbuffer_blob, err = compile_module_to_flatbuffer(
-            str(annotated_model), "cuda", "mhlo", benchmark_dispatch_batch_size, extra_compilation_args)
-        
-        return (config, flatbuffer_blob, err)
-
-    results = []
-
-    with concurrent.futures.ThreadPoolExecutor(max_workers=parallel_threads) as executor:
-        future_to_config = {executor.submit(thread_compile, config): config for config in configs}
-        completed_futures, failed_futures = concurrent.futures.wait(future_to_config)
-         
-        if failed_futures:
-            raise Exception("Failed future from compilation")
-
-        for future in completed_futures:
-            config = future_to_config[future]
-            try:
-                results.append(future.result())
-            except Exception as exc:
-                print('%r generated an exception: %s' % (config, exc))
-        
-    return results
 
 def main(args: argparse.ArgumentParser):
-    print(f"Profiling shape [{args.m},{args.n},{args.k}] on {args.target_backend} for optimal config.")
+    print(
+        f"Profiling shape [{args.m},{args.n},{args.k}] on {args.target_backend} for optimal config.")
 
     compilation_parallelism = args.compilation_parallelism
 
@@ -367,12 +365,6 @@ def main(args: argparse.ArgumentParser):
     else:
         temp_dir = tempfile.TemporaryDirectory()
         artifacts_dir_path = Path(temp_dir.name)
-
-    # Paths needed
-    annotated_model_path = artifacts_dir_path.joinpath("annotated-model.mlir")
-    generated_config_path = artifacts_dir_path.joinpath(
-        "generated_config.json")
-    vmfb_path = artifacts_dir_path.joinpath("annotated_flatbuffer.vmfb")
 
     benchmark_repetitions = args.benchmark_repetitions
     benchmark_dispatch_batch_size = args.benchmark_dispatch_batch_size
@@ -399,10 +391,11 @@ def main(args: argparse.ArgumentParser):
 
     configs = generate_configs(pipeline=Pipeline.GPU_TENSORCORE, operation=OperationType.MATMUL, input_shape=[
                                args.m, args.n, args.k], data_type=args.data_type)
-    print(f"Generated configs for model: {len(configs)}")
+    print(f"Generated {len(configs)} configs for model.")
 
     profiler_results = []
 
+    # Grab up to compilation_parallelism configs. Group for subsequent iterations.
     iter_configs = [iter(configs)] * compilation_parallelism
     grouped_configs = zip_longest(fillvalue=None, *iter_configs)
 
@@ -413,20 +406,14 @@ def main(args: argparse.ArgumentParser):
 
         # For each config, annotate the model, compile and benchmark
 
-        # Grab up to parallel configs:
-        # sub function for compiling all and returning the models/results as a dict to config
-        # Then run through each 
-
-        # config, flatbuffer_blob, err = annotate_and_compile(
         compilation_results = annotate_and_compile(
             config_group,
-            template_model_str, 
-            generated_config_path,
-            benchmark_dispatch_batch_size, 
+            template_model_str,
+            benchmark_dispatch_batch_size,
             args.extra_compilation_args,
             compilation_parallelism)
 
-        for config, flatbuffer_blob, err in compilation_results:        
+        for config, flatbuffer_blob, err in compilation_results:
             # Was compilation successful?
             if not flatbuffer_blob:
                 print("Failed to compile!")
@@ -434,10 +421,10 @@ def main(args: argparse.ArgumentParser):
                     ProfilerResult.create_failed_compilation(config, err))
                 benchmark_results_writer.write_csv_result(profiler_results[-1])
                 continue
-            
+
             # Benchmark model
             benchmark_results = run_benchmark_module(flatbuffer_blob, entry_function="forward",
-                                                    benchmark_repetitions=benchmark_repetitions, benchmark_dispatch_batch_size=benchmark_dispatch_batch_size)
+                                                     benchmark_repetitions=benchmark_repetitions, benchmark_dispatch_batch_size=benchmark_dispatch_batch_size)
 
             # Was benchmark successful?
             if not benchmark_results:
@@ -454,13 +441,11 @@ def main(args: argparse.ArgumentParser):
 
     print(f"Produced {len(profiler_results)} profile results.")
 
-
     # Cleanup any artifacts
     if temp_dir:
         temp_dir.cleanup()
 
     print(f"Results stored in: {output_csv_path}")
-    print("Profiler Complete!")
 
 
 if __name__ == "__main__":

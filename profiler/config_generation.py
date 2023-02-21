@@ -1,12 +1,10 @@
 #!/usr/bin/env python3
 
-import os
 import sys
-import subprocess
 from pathlib import Path
 import json
 import enum
-from itertools import permutations, product
+from itertools import product
 from functools import reduce
 from operator import mul, mod
 
@@ -94,17 +92,9 @@ def generate_workgroup_sizes(pipeline: Pipeline, input_shape: List[int], tile_si
         tensorcore_z_sizes = [1]
         workgroup_sizes = list(product(
             tensorcore_x_sizes, tensorcore_y_sizes, tensorcore_z_sizes))
-
-        # print(f"Starting workgroup_sizes: {type(workgroup_sizes)} - {len(workgroup_sizes)}")
-        # for workgroup_size in workgroup_sizes:
-        #     print(workgroup_size)
-            
+    
         # Total workgroup size < 1024
         workgroup_sizes = [workgroup_size for workgroup_size in workgroup_sizes if not reduce(mul, workgroup_size) > 1024]
-
-        # print(f"Remaining workgroup_sizes1: {type(workgroup_sizes)} - {len(workgroup_sizes)}")
-        # for workgroup_size in workgroup_sizes:
-        #     print(workgroup_size)
 
         # Only use if second level tiling size divides by tensorcore
         iree_tensorcore_size = [16, 16, 8]
@@ -116,15 +106,9 @@ def generate_workgroup_sizes(pipeline: Pipeline, input_shape: List[int], tile_si
             return second_level_tile[0] % iree_tensorcore_size[0] == 0 and second_level_tile[1] % iree_tensorcore_size[1] == 0 and second_level_tile[2] % iree_tensorcore_size[2] == 0
         workgroup_sizes = [
             workgroup_size for workgroup_size in workgroup_sizes if divides_tensorcore(tile_size, workgroup_size)]
-
-        # print(f"Remaining workgroup_sizes2: {type(workgroup_sizes)} - {len(workgroup_sizes)}")
-        # for workgroup_size in workgroup_sizes:
-        #     print(workgroup_size)
     else:
         # Todo: SIMT
         pass
-
-    # When you pick the tile size, for a given tensorop size, the workgroup size options are pretty much determined.
 
     return workgroup_sizes
 
@@ -187,19 +171,10 @@ def generate_configs(pipeline: Pipeline, operation: OperationType, input_shape: 
 
     input_shape = [m, n, k]
     configs = []
-
     tile_sizes = generate_tile_sizes(pipeline, input_shape )
-
-    # print("Showing tile_sizes")
-    # for tile_size in tile_sizes:
-    #     print(tile_size)
     
     for tile_size in tile_sizes:
         workgroup_sizes = generate_workgroup_sizes(pipeline, input_shape, tile_size)
-        # print(f"Showing workgroup_sizes for tile: {tile_size}")
-        # for workgroup_size in workgroup_sizes:
-        #     print (workgroup_size)
-
         pipeline_depths = generate_pipeline_depth(pipeline, input_shape, tile_size)
 
         # Create a config for each combination of tile, workgroup and pipeline
@@ -225,16 +200,11 @@ def generate_configs(pipeline: Pipeline, operation: OperationType, input_shape: 
 
 
 def main():
-    print("hello world")
-
+    print("config_generation.py")
     configs = generate_configs(pipeline=Pipeline.GPU_TENSORCORE, operation=OperationType.MATMUL, input_shape=[
                                4096, 3072, 768], data_type=DataType.F32)
     print(f"Generated config count: {len(configs)}")
-    # for config in configs:
-    #     print(config)
 
-    # print("\ntesting...\n")
-    # print(not reduce(mul, [128, 2, 2]) > 1024)
 
 if __name__ == '__main__':
     sys.exit(main())  # next section explains the use of sys.exit
