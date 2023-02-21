@@ -16,11 +16,11 @@ from model_annotation import model_annotation
 from iree.compiler import ir, CompilerToolError
 from iree.compiler.transforms import ireec as ireec_trans
 from iree.runtime import benchmark_module
-from iree.runtime.benchmark import BenchmarkResult
+from iree.runtime.benchmark import BenchmarkResult, BenchmarkToolError
 import iree.runtime as ireert
 import iree.compiler as ireec
 
-from config_generation import Pipeline, OperationType, DataType, generate_configs, dump_shark_config_json
+from config_generation import Pipeline, OperationType, DataType, generate_configs, CONTROL_CONFIG
 
 
 @enum.unique
@@ -47,12 +47,14 @@ class ProfilerResult:
                  compilation_successful: bool,
                  benchmark_successful: bool,
                  benchmark_results: List[BenchmarkResult] = [],
-                 compiler_error: Optional[CompilerToolError] = None):
+                 compiler_error: Optional[CompilerToolError] = None,
+                 benchmark_error: Optional[BenchmarkToolError] = None):
         self.config = config
         self.compilation_successful = compilation_successful
         self.benchmark_successful = benchmark_successful
         self.benchmark_results = benchmark_results
-        self.compiler_error = None
+        self.compiler_error = compiler_error
+        self.benchmark_error = benchmark_error
 
     @staticmethod
     def create_with_result(config: dict, benchmark_results: List[BenchmarkResult]):
@@ -63,8 +65,8 @@ class ProfilerResult:
         return ProfilerResult(config, False, False, None, compiler_error=compiler_error)
 
     @staticmethod
-    def create_failed_benchmark(config: dict):
-        return ProfilerResult(config, True, False, None)
+    def create_failed_benchmark(config: dict, benchmark_error: Optional[BenchmarkToolError] = None):
+        return ProfilerResult(config, True, False, None, benchmark_error=benchmark_error)
 
 
 class ProfilerResultsWriter:
@@ -82,7 +84,6 @@ class ProfilerResultsWriter:
             "time_std", "cpu_time_std",
             "time_cv", "cpu_time_cv",
             "error",
-            # "time",  "cpu_time",  "iterations",  "user_counters",
         ]
 
     def initialize_output_csv(self):
@@ -122,7 +123,7 @@ class ProfilerResultsWriter:
             err = profiler_result.compiler_error
         if not profiler_result.benchmark_successful:
             # TODO: capture error
-            err = "Failed to benchmark."
+            err = profiler_result.benchmark_error
         else:
             # Pull key benchmark metrics
             benchmark_results = profiler_result.benchmark_results
@@ -221,7 +222,7 @@ def compile_module_to_flatbuffer(
         )
     except CompilerToolError as err:
         flatbuffer_blob = None
-        print(f"the compiler failed but we will still continue: {err}")
+        print(f"Compile tool failed: {err}")
         return None, err
 
     return flatbuffer_blob, None
@@ -237,8 +238,12 @@ def annotate_and_compile(
 
     def thread_compile(config):
         print(f"Annotating and compiling config: {config}")
-        annotated_model = annotate_mlir_model(
-            input_model_str=template_model_str, config_json=json.dumps(config))
+        annotated_model = None
+        if config == CONTROL_CONFIG:
+            annotated_model = template_model_str
+        else:
+            annotated_model = annotate_mlir_model(
+                input_model_str=template_model_str, config_json=json.dumps(config))
 
         # Compile model
         flatbuffer_blob, err = compile_module_to_flatbuffer(
@@ -282,10 +287,14 @@ def run_benchmark_module(
     funcs = [a for a in vm_module.function_names if a != "__init"]
     print(f"Benchmarking module with funcs: {funcs}")
 
-    benchmark_results = benchmark_module(
-        vm_module, device=device, benchmark_repetitions=benchmark_repetitions, batch_size=benchmark_dispatch_batch_size)
-
-    return benchmark_results
+    try:
+        benchmark_results = benchmark_module(
+            vm_module, device=device, benchmark_repetitions=benchmark_repetitions, batch_size=benchmark_dispatch_batch_size)
+        return benchmark_results, None
+    except BenchmarkToolError as err:
+        flatbuffer_blob = None
+        print(f"Benchmark tool failed: {err}")
+        return None, err
 
 
 def dir_path(string) -> Optional[Path]:
@@ -393,6 +402,9 @@ def main(args: argparse.ArgumentParser):
                                args.m, args.n, args.k], data_type=args.data_type)
     print(f"Generated {len(configs)} configs for model.")
 
+    # Control config for first benchmark
+    configs.insert(0, CONTROL_CONFIG)
+
     profiler_results = []
 
     # Grab up to compilation_parallelism configs. Group for subsequent iterations.
@@ -405,7 +417,6 @@ def main(args: argparse.ArgumentParser):
             print(f"Testing config {true_index}/{len(configs)} : {config}")
 
         # For each config, annotate the model, compile and benchmark
-
         compilation_results = annotate_and_compile(
             config_group,
             template_model_str,
@@ -423,16 +434,15 @@ def main(args: argparse.ArgumentParser):
                 continue
 
             # Benchmark model
-            benchmark_results = run_benchmark_module(flatbuffer_blob, entry_function="forward",
-                                                     benchmark_repetitions=benchmark_repetitions, benchmark_dispatch_batch_size=benchmark_dispatch_batch_size)
+            benchmark_results, err = run_benchmark_module(flatbuffer_blob, entry_function="forward",
+                                                          benchmark_repetitions=benchmark_repetitions, benchmark_dispatch_batch_size=benchmark_dispatch_batch_size)
 
             # Was benchmark successful?
-            if not benchmark_results:
+            if err:
                 print("Failed to benchmark!")
                 profiler_results.append(
-                    ProfilerResult.create_failed_benchmark(config))
+                    ProfilerResult.create_failed_benchmark(config, err))
                 benchmark_results_writer.write_csv_result(profiler_results[-1])
-
                 continue
 
             profiler_results.append(

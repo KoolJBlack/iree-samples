@@ -19,6 +19,7 @@ class Pipeline(enum.Enum):
     def __str__(self):
         return self.name
 
+
 @enum.unique
 class OperationType(enum.Enum):
     MATMUL = "matmul"
@@ -40,6 +41,7 @@ class DataType(enum.Enum):
         except KeyError:
             raise ValueError()
 
+
 def generate_tile_sizes(pipeline: Pipeline, input_shape: List[int]) -> List[List[int]]:
     """"Returns list of possible tile sizes for input shape and pipeline"""
     tile_sizes = []
@@ -49,7 +51,7 @@ def generate_tile_sizes(pipeline: Pipeline, input_shape: List[int]) -> List[List
         tensorcore_mn_sizes = [16, 32, 64, 128, 256, 512]
         tensorcore_k_sizes = [16, 32, 64, 128]
         tile_sizes = list(product(tensorcore_mn_sizes,
-                             tensorcore_mn_sizes, tensorcore_k_sizes))
+                                  tensorcore_mn_sizes, tensorcore_k_sizes))
 
         # K dim is always smaller than the picked M or N
         tile_sizes = [tile_size for tile_size in tile_sizes if tile_size[2]
@@ -92,13 +94,15 @@ def generate_workgroup_sizes(pipeline: Pipeline, input_shape: List[int], tile_si
         tensorcore_z_sizes = [1]
         workgroup_sizes = list(product(
             tensorcore_x_sizes, tensorcore_y_sizes, tensorcore_z_sizes))
-    
+
         # Total workgroup size < 1024
-        workgroup_sizes = [workgroup_size for workgroup_size in workgroup_sizes if not reduce(mul, workgroup_size) > 1024]
+        workgroup_sizes = [workgroup_size for workgroup_size in workgroup_sizes if not reduce(
+            mul, workgroup_size) > 1024]
 
         # Only use if second level tiling size divides by tensorcore
         iree_tensorcore_size = [16, 16, 8]
         warp_size = 32
+
         def divides_tensorcore(tile_size, workgroup_size):
             second_level_tile = [tile_size[0] / workgroup_size[1],
                                  tile_size[1] / (workgroup_size[0] / warp_size), tile_size[2]]
@@ -155,27 +159,42 @@ def assemble_config_object(
     return config_object
 
 
-def dump_shark_config_json(config: dict, output_path : Path):
+"""A blank control config that does not annotate the model."""
+CONTROL_CONFIG = {
+    "options": [{
+        "work_group_tile_sizes": "(control)",
+        "work_group_sizes": "(control)",
+        "pipeline": "control",
+    }],
+    "identifier": "control",
+    "m": "control",
+    "n": "control",
+    "k": "control",
+}
+
+
+def dump_shark_config_json(config: dict, output_path: Path):
     """Writes out a shark config dict object to a json file.
     Returns number of bytes written."""
     with open(output_path, "w") as f:
         return f.write(json.dumps(config))
 
 
-
 def generate_configs(pipeline: Pipeline, operation: OperationType, input_shape: List[int], data_type: DataType, m: int = 4096, n: int = 3072, k: int = 768) -> List[dict]:
     """Generates a list of configs based on options.
-    
+
     Configs are returned asa list of dictionaries. Each config can be used to annotate model using sharks model_annotation.py
     """
 
     input_shape = [m, n, k]
     configs = []
-    tile_sizes = generate_tile_sizes(pipeline, input_shape )
-    
+    tile_sizes = generate_tile_sizes(pipeline, input_shape)
+
     for tile_size in tile_sizes:
-        workgroup_sizes = generate_workgroup_sizes(pipeline, input_shape, tile_size)
-        pipeline_depths = generate_pipeline_depth(pipeline, input_shape, tile_size)
+        workgroup_sizes = generate_workgroup_sizes(
+            pipeline, input_shape, tile_size)
+        pipeline_depths = generate_pipeline_depth(
+            pipeline, input_shape, tile_size)
 
         # Create a config for each combination of tile, workgroup and pipeline
         for workgroup_size in workgroup_sizes:
@@ -185,16 +204,16 @@ def generate_configs(pipeline: Pipeline, operation: OperationType, input_shape: 
                     b = input_shape[0]
                     input_shape = input_shape[1:]
                 config_dict = assemble_config_object(
-                    tile_size=tile_size, 
-                    workgroup_size=workgroup_size, 
+                    tile_size=tile_size,
+                    workgroup_size=workgroup_size,
                     pipeline_name=pipeline.name,
                     pipeline_depth=pipeline_depth,
                     identifier="matmul",
-                    b =b,
-                    m = input_shape[0],
+                    b=b,
+                    m=input_shape[0],
                     n=input_shape[1],
                     k=input_shape[2]
-                    )
+                )
                 configs.append(config_dict)
     return configs
 
