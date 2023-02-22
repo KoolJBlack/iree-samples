@@ -43,12 +43,14 @@ class ProfilerResult:
     # TODO: capture errors?
 
     def __init__(self,
+                 config_index: int,
                  config: dict,
                  compilation_successful: bool,
                  benchmark_successful: bool,
                  benchmark_results: List[BenchmarkResult] = [],
                  compiler_error: Optional[CompilerToolError] = None,
                  benchmark_error: Optional[BenchmarkToolError] = None):
+        self.config_index = config_index
         self.config = config
         self.compilation_successful = compilation_successful
         self.benchmark_successful = benchmark_successful
@@ -57,16 +59,16 @@ class ProfilerResult:
         self.benchmark_error = benchmark_error
 
     @staticmethod
-    def create_with_result(config: dict, benchmark_results: List[BenchmarkResult]):
-        return ProfilerResult(config, True, True, benchmark_results)
+    def create_with_result(config_index: int, config: dict, benchmark_results: List[BenchmarkResult]):
+        return ProfilerResult(config_index, config, True, True, benchmark_results)
 
     @staticmethod
-    def create_failed_compilation(config: dict, compiler_error: Optional[CompilerToolError] = None):
-        return ProfilerResult(config, False, False, None, compiler_error=compiler_error)
+    def create_failed_compilation(config_index: int, config: dict, compiler_error: Optional[CompilerToolError] = None):
+        return ProfilerResult(config_index, config, False, False, None, compiler_error=compiler_error)
 
     @staticmethod
-    def create_failed_benchmark(config: dict, benchmark_error: Optional[BenchmarkToolError] = None):
-        return ProfilerResult(config, True, False, None, benchmark_error=benchmark_error)
+    def create_failed_benchmark(config_index: int, config: dict, benchmark_error: Optional[BenchmarkToolError] = None):
+        return ProfilerResult(config_index, config, True, False, None, benchmark_error=benchmark_error)
 
 
 class ProfilerResultsWriter:
@@ -76,6 +78,7 @@ class ProfilerResultsWriter:
         self.output_csv_path = output_csv_path
         self.benchmark_repetitions = benchmark_repetitions
         self.field_names = [
+            "config_index",
             "benchmark_name",
             "tile_sizes", "work_group_sizes", "pipeline", "pipeline_depth", "identifier", "b", "m", "n", "k",
             "iterations",
@@ -107,6 +110,7 @@ class ProfilerResultsWriter:
             b = config["b"]
 
         bench_result = {
+            "config_index": profiler_result.config_index,
             "tile_sizes": str(config_options["work_group_tile_sizes"])[1:-1],
             "work_group_sizes": str(config_options["work_group_sizes"])[1:-1],
             "pipeline": config_options["pipeline"],
@@ -120,10 +124,11 @@ class ProfilerResultsWriter:
 
         err = None
         if not profiler_result.compilation_successful:
-            err = profiler_result.compiler_error
-        if not profiler_result.benchmark_successful:
+            err = str(profiler_result.compiler_error).replace('\n', '|')
+            # err = str(profiler_result.compiler_error)
+        elif not profiler_result.benchmark_successful:
             # TODO: capture error
-            err = profiler_result.benchmark_error
+            err = str(profiler_result.benchmark_error)
         else:
             # Pull key benchmark metrics
             benchmark_results = profiler_result.benchmark_results
@@ -357,6 +362,11 @@ def parse_arguments():
                         help="Number of simultaneous compilations to run. Default=1",
                         required=False,
                         default=1)
+    parser.add_argument("--config_start_index",
+                        type=int,
+                        help="Continue from a config number",
+                        required=False,
+                        default=None)
     return parser.parse_args()
 
 
@@ -407,13 +417,16 @@ def main(args: argparse.ArgumentParser):
 
     profiler_results = []
 
+    if args.config_start_index:
+        configs = configs[args.config_start_index:]
+
     # Grab up to compilation_parallelism configs. Group for subsequent iterations.
     iter_configs = [iter(configs)] * compilation_parallelism
     grouped_configs = zip_longest(fillvalue=None, *iter_configs)
 
     for group_index, config_group in enumerate(grouped_configs):
         for index, config in enumerate(config_group):
-            true_index = group_index * compilation_parallelism + index
+            true_index = group_index * compilation_parallelism + index + args.config_start_index
             print(f"Testing config {true_index}/{len(configs)} : {config}")
 
         # For each config, annotate the model, compile and benchmark
@@ -424,12 +437,14 @@ def main(args: argparse.ArgumentParser):
             args.extra_compilation_args,
             compilation_parallelism)
 
-        for config, flatbuffer_blob, err in compilation_results:
+        for index, (config, flatbuffer_blob, err) in enumerate(compilation_results):
+            config_index = group_index * compilation_parallelism + \
+                index + args.config_start_index
             # Was compilation successful?
             if not flatbuffer_blob:
                 print("Failed to compile!")
                 profiler_results.append(
-                    ProfilerResult.create_failed_compilation(config, err))
+                    ProfilerResult.create_failed_compilation(config_index, config, err))
                 benchmark_results_writer.write_csv_result(profiler_results[-1])
                 continue
 
@@ -441,12 +456,12 @@ def main(args: argparse.ArgumentParser):
             if err:
                 print("Failed to benchmark!")
                 profiler_results.append(
-                    ProfilerResult.create_failed_benchmark(config, err))
+                    ProfilerResult.create_failed_benchmark(config_index, config, err))
                 benchmark_results_writer.write_csv_result(profiler_results[-1])
                 continue
 
             profiler_results.append(
-                ProfilerResult.create_with_result(config, benchmark_results))
+                ProfilerResult.create_with_result(config_index, config, benchmark_results))
             benchmark_results_writer.write_csv_result(profiler_results[-1])
 
     print(f"Produced {len(profiler_results)} profile results.")

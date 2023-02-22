@@ -84,8 +84,6 @@ def generate_workgroup_sizes(pipeline: Pipeline, input_shape: List[int], tile_si
     """"Returns list of possible workgroup sizes for tile size"""
     workgroup_sizes = []
 
-    # print("generate_workgroup_sizes")
-
     if pipeline == Pipeline.GPU_TENSORCORE:
         # Tensorcore main dims X, Y, Z
         tensorcore_x_sizes = [32, 64, 128, 256, 512]
