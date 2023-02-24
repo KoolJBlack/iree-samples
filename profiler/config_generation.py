@@ -29,10 +29,13 @@ class OperationType(enum.Enum):
 
 @enum.unique
 class DataType(enum.Enum):
-    I8 = "i8"
-    I32 = "i32"
-    F32 = "f32"
-    F16 = "f16"
+    I8 = ("i8", 1)
+    I32 = ("i32", 4)
+    F32 = ("f32", 4)
+    F16 = ("f16", 8)
+
+    def __init__(self, value, bytes_size):
+        self.bytes_size = bytes_size
 
     @staticmethod
     def from_string(s: str):
@@ -42,7 +45,7 @@ class DataType(enum.Enum):
             raise ValueError()
 
 
-def generate_tile_sizes(pipeline: Pipeline, input_shape: List[int]) -> List[List[int]]:
+def generate_tile_sizes(pipeline: Pipeline, data_type: DataType, input_shape: List[int]) -> List[List[int]]:
     """"Returns list of possible tile sizes for input shape and pipeline"""
     tile_sizes = []
 
@@ -68,7 +71,6 @@ def generate_tile_sizes(pipeline: Pipeline, input_shape: List[int]) -> List[List
             tile_size = [1] + tile_size
 
     # Toss any config that does not divide the input shape
-
     def divides_shape(input_shape, tile_size):
         for tile, shape in zip(tile_size, input_shape):
             if shape % tile != 0:
@@ -76,6 +78,15 @@ def generate_tile_sizes(pipeline: Pipeline, input_shape: List[int]) -> List[List
         return True
     tile_sizes = [tile_size for tile_size in tile_sizes if divides_shape(
         input_shape, tile_size)]
+
+    # Ensure shared memory usage <=64KB
+    def fits_shared_mem(tile_size):
+        total_shared_mem_size = (
+            tile_size[0] * tile_size[2] + tile_size[1] * tile_size[2]) * data_type.bytes_size
+        shared_mem_bytes = 64 * 1024
+        return total_shared_mem_size < shared_mem_bytes
+    tile_sizes = [
+        tile_size for tile_size in tile_sizes if fits_shared_mem(tile_size)]
 
     return tile_sizes
 
@@ -186,7 +197,7 @@ def generate_configs(pipeline: Pipeline, operation: OperationType, input_shape: 
 
     input_shape = [m, n, k]
     configs = []
-    tile_sizes = generate_tile_sizes(pipeline, input_shape)
+    tile_sizes = generate_tile_sizes(pipeline, data_type, input_shape)
 
     for tile_size in tile_sizes:
         workgroup_sizes = generate_workgroup_sizes(
