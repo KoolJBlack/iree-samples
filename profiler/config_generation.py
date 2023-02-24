@@ -51,7 +51,7 @@ def generate_tile_sizes(pipeline: Pipeline, data_type: DataType, input_shape: Li
 
     if pipeline == Pipeline.GPU_TENSORCORE:
         # Tensorcor main dims M, N, K
-        tensorcore_mn_sizes = [16, 32, 64, 128, 256, 512]
+        tensorcore_mn_sizes = [16, 32, 64, 128, 256]
         tensorcore_k_sizes = [16, 32, 64, 128]
         tile_sizes = list(product(tensorcore_mn_sizes,
                                   tensorcore_mn_sizes, tensorcore_k_sizes))
@@ -98,11 +98,19 @@ def generate_workgroup_sizes(pipeline: Pipeline, input_shape: List[int], tile_si
     if pipeline == Pipeline.GPU_TENSORCORE:
         # Tensorcore main dims X, Y, Z
         tensorcore_x_sizes = [32, 64, 128, 256, 512]
-        tensorcore_y_sizes = [1, 2, 4, 8]
+        tensorcore_y_sizes = [1, 2]
+        # tensorcore_y_sizes = [1, 2, 4, 8]
         # For tensorcore, workgroup Z is always 1
         tensorcore_z_sizes = [1]
         workgroup_sizes = list(product(
             tensorcore_x_sizes, tensorcore_y_sizes, tensorcore_z_sizes))
+
+        tensorcore_x_sizes = [32, 64, 128, 256]
+        tensorcore_y_sizes = [4]
+
+        workgroup_sizes2 = list(product(
+            tensorcore_x_sizes, tensorcore_y_sizes, tensorcore_z_sizes))
+        workgroup_sizes.extend(workgroup_sizes2)
 
         # Total workgroup size < 1024
         workgroup_sizes = [workgroup_size for workgroup_size in workgroup_sizes if not reduce(
@@ -134,7 +142,7 @@ def generate_pipeline_depth(pipeline: Pipeline, input_shape: List[int], tile_siz
     if tile_size[2] == input_shape[1]:
         return []
     # For tensorcore, usually between 1 and 12, increments of 1
-    return [x for x in range(1, 13)]
+    return [x for x in range(1, 6)]
 
 
 def assemble_config_object(

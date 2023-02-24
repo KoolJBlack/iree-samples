@@ -366,7 +366,7 @@ def parse_arguments():
                         type=int,
                         help="Continue from a config number",
                         required=False,
-                        default=None)
+                        default=0)
     return parser.parse_args()
 
 
