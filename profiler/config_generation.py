@@ -107,7 +107,6 @@ def generate_workgroup_sizes(pipeline: Pipeline, input_shape: List[int], tile_si
 
         tensorcore_x_sizes = [32, 64, 128, 256]
         tensorcore_y_sizes = [4]
-
         workgroup_sizes2 = list(product(
             tensorcore_x_sizes, tensorcore_y_sizes, tensorcore_z_sizes))
         workgroup_sizes.extend(workgroup_sizes2)

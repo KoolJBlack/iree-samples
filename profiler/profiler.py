@@ -12,6 +12,9 @@ import concurrent.futures
 import json
 from itertools import zip_longest
 from model_annotation import model_annotation
+import time
+from dataclasses import dataclass
+from datetime import timedelta
 
 from iree.compiler import ir, CompilerToolError
 from iree.compiler.transforms import ireec as ireec_trans
@@ -49,7 +52,9 @@ class ProfilerResult:
                  benchmark_successful: bool,
                  benchmark_results: List[BenchmarkResult] = [],
                  compiler_error: Optional[CompilerToolError] = None,
-                 benchmark_error: Optional[BenchmarkToolError] = None):
+                 benchmark_error: Optional[BenchmarkToolError] = None,
+                 compilation_time: Optional[float] = None,
+                 benchmark_time: Optional[float] = None):
         self.config_index = config_index
         self.config = config
         self.compilation_successful = compilation_successful
@@ -57,18 +62,20 @@ class ProfilerResult:
         self.benchmark_results = benchmark_results
         self.compiler_error = compiler_error
         self.benchmark_error = benchmark_error
+        self.compilation_time = compilation_time
+        self.benchmark_time = benchmark_time
 
     @staticmethod
-    def create_with_result(config_index: int, config: dict, benchmark_results: List[BenchmarkResult]):
-        return ProfilerResult(config_index, config, True, True, benchmark_results)
+    def create_with_result(config_index: int, config: dict, benchmark_results: List[BenchmarkResult], compilation_time: float, benchmark_time: float):
+        return ProfilerResult(config_index, config, True, True, benchmark_results, compilation_time=compilation_time, benchmark_time=benchmark_time)
 
     @staticmethod
-    def create_failed_compilation(config_index: int, config: dict, compiler_error: Optional[CompilerToolError] = None):
-        return ProfilerResult(config_index, config, False, False, None, compiler_error=compiler_error)
+    def create_failed_compilation(config_index: int, config: dict, compiler_error: CompilerToolError, compilation_time: float):
+        return ProfilerResult(config_index, config, False, False, None, compiler_error=compiler_error, compilation_time=compilation_time)
 
     @staticmethod
-    def create_failed_benchmark(config_index: int, config: dict, benchmark_error: Optional[BenchmarkToolError] = None):
-        return ProfilerResult(config_index, config, True, False, None, benchmark_error=benchmark_error)
+    def create_failed_benchmark(config_index: int, config: dict, benchmark_error: BenchmarkToolError, compilation_time: float, benchmark_time: float):
+        return ProfilerResult(config_index, config, True, False, None, benchmark_error=benchmark_error, compilation_time=compilation_time, benchmark_time=benchmark_time)
 
 
 class ProfilerResultsWriter:
@@ -81,11 +88,13 @@ class ProfilerResultsWriter:
             "config_index",
             "benchmark_name",
             "tile_sizes", "work_group_sizes", "pipeline", "pipeline_depth", "identifier", "b", "m", "n", "k",
+            "benchmark_repetitions",
             "iterations",
             "time_mean", "cpu_time_mean",
             "time_median", "cpu_time_median",
             "time_std", "cpu_time_std",
             "time_cv", "cpu_time_cv",
+            "compilation_time_seconds", "benchmark_time_seconds",
             "error",
         ]
 
@@ -120,6 +129,8 @@ class ProfilerResultsWriter:
             "m": config["m"],
             "n": config["n"],
             "k": config["k"],
+            "compilation_time_seconds": profiler_result.compilation_time,
+            "benchmark_time_seconds": profiler_result.benchmark_time,
         }
 
         err = None
@@ -142,6 +153,7 @@ class ProfilerResultsWriter:
 
             bench_result.update({
                 "benchmark_name": benchmark_name,
+                "benchmark_repetitions": len(benchmark_results_remaining),
                 "iterations": iterations,
                 "time_mean": benchmark_result_mean.time,
                 "cpu_time_mean": benchmark_result_mean.cpu_time,
@@ -233,16 +245,25 @@ def compile_module_to_flatbuffer(
     return flatbuffer_blob, None
 
 
+@dataclass
+class CompilationResult:
+    config: dict
+    flatbuffer_blob: Optional[bytes]
+    err: Optional[str]
+    compilation_time_s: float
+
+
 def annotate_and_compile(
         configs: List[dict],
         template_model_str: str,
         benchmark_dispatch_batch_size: int,
         extra_compilation_args: List,
-        parallel_threads: int = 1) -> List[Tuple[dict, bytes, Optional[str]]]:
+        parallel_threads: int = 1) -> List[CompilationResult]:
     """Parallel annotation and compiling for models."""
 
     def thread_compile(config):
-        print(f"Annotating and compiling config: {config}")
+        # print(f"Annotating and compiling config: {config}")
+        start_time = time.time()
         annotated_model = None
         if config == CONTROL_CONFIG:
             annotated_model = template_model_str
@@ -254,7 +275,8 @@ def annotate_and_compile(
         flatbuffer_blob, err = compile_module_to_flatbuffer(
             str(annotated_model), "cuda", "mhlo", benchmark_dispatch_batch_size, extra_compilation_args)
 
-        return (config, flatbuffer_blob, err)
+        elapsed_time = time.time() - start_time
+        return CompilationResult(config, flatbuffer_blob, err, elapsed_time)
 
     results = []
 
@@ -284,13 +306,13 @@ def run_benchmark_module(
         device: str = "cuda",
         driver: str = "cuda",
         benchmark_repetitions: Optional[int] = None,
-        benchmark_dispatch_batch_size: Optional[int] = None) -> List[BenchmarkResult]:
+        benchmark_dispatch_batch_size: Optional[int] = None) -> Tuple[List[BenchmarkResult], Optional[BenchmarkToolError]]:
     # Create a module
     config = ireert.Config(driver_name=driver)
     vm_module = ireert.VmModule.from_flatbuffer(
         config.vm_instance, flatbuffer_blob)
     funcs = [a for a in vm_module.function_names if a != "__init"]
-    print(f"Benchmarking module with funcs: {funcs}")
+    # print(f"Benchmarking module with funcs: {funcs}")
 
     try:
         benchmark_results = benchmark_module(
@@ -367,6 +389,11 @@ def parse_arguments():
                         help="Continue from a config number",
                         required=False,
                         default=0)
+    parser.add_argument("--config_end_index",
+                        type=int,
+                        help="Continue from a config number",
+                        required=False,
+                        default=None)
     return parser.parse_args()
 
 
@@ -417,17 +444,22 @@ def main(args: argparse.ArgumentParser):
 
     profiler_results = []
 
-    if args.config_start_index:
-        configs = configs[args.config_start_index:]
+    config_end_index = len(configs)
+    if args.config_end_index:
+        config_end_index = args.config_end_index
+    configs = configs[args.config_start_index:config_end_index]
 
     # Grab up to compilation_parallelism configs. Group for subsequent iterations.
     iter_configs = [iter(configs)] * compilation_parallelism
     grouped_configs = zip_longest(fillvalue=None, *iter_configs)
 
+    tuning_start_time_s = time.time()
+
     for group_index, config_group in enumerate(grouped_configs):
         for index, config in enumerate(config_group):
-            true_index = group_index * compilation_parallelism + index + args.config_start_index
-            print(f"Testing config {true_index}/{len(configs)} : {config}")
+            config_index = group_index * compilation_parallelism + \
+                index + args.config_start_index
+            print(f"Testing config {config_index}/{len(configs)} : {config}")
 
         # For each config, annotate the model, compile and benchmark
         compilation_results = annotate_and_compile(
@@ -437,32 +469,41 @@ def main(args: argparse.ArgumentParser):
             args.extra_compilation_args,
             compilation_parallelism)
 
-        for index, (config, flatbuffer_blob, err) in enumerate(compilation_results):
+        for index, compilation_result in enumerate(compilation_results):
             config_index = group_index * compilation_parallelism + \
                 index + args.config_start_index
             # Was compilation successful?
-            if not flatbuffer_blob:
-                print("Failed to compile!")
+            if not compilation_result.flatbuffer_blob:
+                print(f"Failed to compile {config_index}/{len(configs)}")
+                tuning_elapsed_time_s = time.time() - tuning_start_time_s
+                print(f"Tuned config {config_index}/{len(configs)} - total elapsed time: {timedelta(seconds=tuning_elapsed_time_s)}, compilation time: {compilation_result.compilation_time_s:0.4f}sec")
                 profiler_results.append(
-                    ProfilerResult.create_failed_compilation(config_index, config, err))
+                    ProfilerResult.create_failed_compilation(config_index, compilation_result.config, compilation_result.err, compilation_result.compilation_time_s))
                 benchmark_results_writer.write_csv_result(profiler_results[-1])
                 continue
 
+            benchmark_start_time_s = time.time()
+
             # Benchmark model
-            benchmark_results, err = run_benchmark_module(flatbuffer_blob, entry_function="forward",
+            benchmark_results, err = run_benchmark_module(compilation_result.flatbuffer_blob, entry_function="forward",
                                                           benchmark_repetitions=benchmark_repetitions, benchmark_dispatch_batch_size=benchmark_dispatch_batch_size)
+
+            benchmark_elapsed_time_s = time.time() - benchmark_start_time_s
+            tuning_elapsed_time_s = time.time() - tuning_start_time_s
 
             # Was benchmark successful?
             if err:
-                print("Failed to benchmark!")
-                profiler_results.append(
-                    ProfilerResult.create_failed_benchmark(config_index, config, err))
-                benchmark_results_writer.write_csv_result(profiler_results[-1])
-                continue
+                print(f"Failed to benchmark {config_index}/{len(configs)}")
 
-            profiler_results.append(
-                ProfilerResult.create_with_result(config_index, config, benchmark_results))
-            benchmark_results_writer.write_csv_result(profiler_results[-1])
+                print(f"Tuned config {config_index}/{len(configs)} - total elapsed time: {timedelta(seconds=tuning_elapsed_time_s)}, compilation time: {compilation_result.compilation_time_s:0.4f}sec, benchmark time: {benchmark_elapsed_time_s:0.4f}sec")
+                profiler_results.append(
+                    ProfilerResult.create_failed_benchmark(config_index, compilation_result.config, err, compilation_result.compilation_time_s, benchmark_elapsed_time_s))
+                benchmark_results_writer.write_csv_result(profiler_results[-1])
+            else:
+                print(f"Tuned config {config_index}/{len(configs)} - total elapsed time: {timedelta(seconds=tuning_elapsed_time_s)}, compilation time: {compilation_result.compilation_time_s:0.4f}sec, benchmark time: {benchmark_elapsed_time_s:0.4f}sec with {benchmark_results[0].iterations} iterations")
+                profiler_results.append(
+                    ProfilerResult.create_with_result(config_index, compilation_result.config, benchmark_results, compilation_result.compilation_time_s, benchmark_elapsed_time_s))
+                benchmark_results_writer.write_csv_result(profiler_results[-1])
 
     print(f"Produced {len(profiler_results)} profile results.")
 
