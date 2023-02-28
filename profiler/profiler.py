@@ -181,12 +181,13 @@ def create_context() -> ir.Context:
 def annotate_mlir_model(
         input_model_str: str,
         config_json: str,
+        operation_type: OperationType,
         annotated_model_output_path: Optional[Path] = None) -> ir.Module:
     """"Annotate model from with config. 
     Configs are consumed form a Path.
     Returns annotated IREE Model."""
 
-    search_op = "matmul"
+    search_op = operation_type.value
     with create_context() as ctx:
         annotated_model = model_annotation(
             ctx=None,
@@ -255,6 +256,7 @@ class CompilationResult:
 
 def annotate_and_compile(
         configs: List[dict],
+        operation_type: OperationType,
         template_model_str: str,
         benchmark_dispatch_batch_size: int,
         extra_compilation_args: List,
@@ -269,7 +271,7 @@ def annotate_and_compile(
             annotated_model = template_model_str
         else:
             annotated_model = annotate_mlir_model(
-                input_model_str=template_model_str, config_json=json.dumps(config))
+                input_model_str=template_model_str, config_json=json.dumps(config), operation_type=operation_type)
 
         # Compile model
         flatbuffer_blob, err = compile_module_to_flatbuffer(
@@ -333,15 +335,139 @@ def dir_path(string) -> Optional[Path]:
         return None
 
 
+def run_profile(
+        b: Optional[int],
+        m: int,
+        n: int,
+        k: int,
+        data_type: DataType,
+        target_backend: TargetBackend,
+        template_mlir_model_path: Path,
+        output_csv_path: Path,
+        benchmark_repetitions: int,
+        benchmark_dispatch_batch_size: int,
+        extra_compilation_args: List[str] = [],
+        compilation_parallelism: int = 1,
+        pipeline: Pipeline = Pipeline.GPU_TENSORCORE,
+        operation_type: OperationType = OperationType.MATMUL,
+        config_start_index: int = 0,
+        config_end_index: Optional[int] = None):
+    """Run the profiler."""
+    print(
+        f"Profiling shape [{b}, {m},{n},{k}] on {target_backend} for optimal config.")
+
+    compilation_parallelism = compilation_parallelism
+
+    # Output CSV path
+    now = datetime.now()
+    if not output_csv_path:
+        raise ValueError("Output CSV path required.")
+
+    benchmark_results_writer = ProfilerResultsWriter(
+        output_csv_path, benchmark_repetitions)
+    benchmark_results_writer.initialize_output_csv()
+
+    # Load template model
+    input_model_path = template_mlir_model_path
+    template_model_str = ""
+    with open(input_model_path, "r") as f:
+        template_model_str = f.read()
+
+    if not template_model_str:
+        raise ValueError("Unable to read template model.")
+
+
+    input_shape = [int(m), int(n), int(k)]
+    if b:
+        input_shape.insert(0, int(b))
+
+    configs = generate_configs(
+        pipeline=pipeline, operation=operation_type, input_shape=input_shape, data_type=data_type)
+    print(f"Generated {len(configs)} configs for model.")
+
+    # Control config for first benchmark
+    configs.insert(0, CONTROL_CONFIG)
+
+    profiler_results = []
+    if not config_end_index:
+        config_end_index = len(configs)
+    config_count = config_end_index
+    configs = configs[config_start_index:config_end_index]
+
+    # Grab up to compilation_parallelism configs. Group for subsequent iterations.
+    iter_configs = [iter(configs)] * compilation_parallelism
+    grouped_configs = zip_longest(fillvalue=None, *iter_configs)
+
+    tuning_start_time_s = time.time()
+
+    for group_index, config_group in enumerate(grouped_configs):
+        for index, config in enumerate(config_group):
+            config_index = group_index * compilation_parallelism + \
+                index + config_start_index
+            print(f"Testing config {config_index}/{config_count} : {config}")
+
+        # For each config, annotate the model, compile and benchmark
+        compilation_results = annotate_and_compile(
+            config_group,
+            operation_type,
+            template_model_str,
+            benchmark_dispatch_batch_size,
+            extra_compilation_args,
+            compilation_parallelism)
+
+        for index, compilation_result in enumerate(compilation_results):
+            config_index = group_index * compilation_parallelism + \
+                index + config_start_index
+            # Was compilation successful?
+            if not compilation_result.flatbuffer_blob:
+                print(f"Failed to compile {config_index}/{config_count}")
+                tuning_elapsed_time_s = time.time() - tuning_start_time_s
+                print(f"Tuned config {config_index}/{config_count} - total elapsed time: {timedelta(seconds=tuning_elapsed_time_s)}, compilation time: {compilation_result.compilation_time_s:0.4f}sec")
+                profiler_results.append(
+                    ProfilerResult.create_failed_compilation(config_index, compilation_result.config, compilation_result.err, compilation_result.compilation_time_s))
+                benchmark_results_writer.write_csv_result(profiler_results[-1])
+                continue
+
+            benchmark_start_time_s = time.time()
+
+            # Benchmark model
+            benchmark_results, err = run_benchmark_module(compilation_result.flatbuffer_blob, entry_function="forward",
+                                                          benchmark_repetitions=benchmark_repetitions, benchmark_dispatch_batch_size=benchmark_dispatch_batch_size)
+
+            benchmark_elapsed_time_s = time.time() - benchmark_start_time_s
+            tuning_elapsed_time_s = time.time() - tuning_start_time_s
+
+            # Was benchmark successful?
+            if err:
+                print(f"Failed to benchmark {config_index}/{config_count}")
+
+                print(f"Tuned config {config_index}/{config_count} - total elapsed time: {timedelta(seconds=tuning_elapsed_time_s)}, compilation time: {compilation_result.compilation_time_s:0.4f}sec, benchmark time: {benchmark_elapsed_time_s:0.4f}sec")
+                profiler_results.append(
+                    ProfilerResult.create_failed_benchmark(config_index, compilation_result.config, err, compilation_result.compilation_time_s, benchmark_elapsed_time_s))
+                benchmark_results_writer.write_csv_result(profiler_results[-1])
+            else:
+                print(
+                    f"Tuned config {config_index}/{config_count} - total elapsed time: {timedelta(seconds=tuning_elapsed_time_s)}, compilation time: {compilation_result.compilation_time_s:0.4f}sec, benchmark time: {benchmark_elapsed_time_s:0.4f}sec with {benchmark_results[0].iterations} iterations")
+                profiler_results.append(
+                    ProfilerResult.create_with_result(config_index, compilation_result.config, benchmark_results, compilation_result.compilation_time_s, benchmark_elapsed_time_s))
+                benchmark_results_writer.write_csv_result(profiler_results[-1])
+
+    print(f"Produced {len(profiler_results)} profile results.")
+
+    print(f"Results stored in: {output_csv_path}")
+
+
 def parse_arguments():
     parser = argparse.ArgumentParser(
-        description="Profiler for tuning dispatches in IREE")
+        description="Profiler for tuning dispatches in IREE.")
     parser.add_argument(
-        "--m", type=int, help="m dim for matmul", required=False, default=4096)
+        "--b", type=int, help="b dim for batch matmul. Must match template mlir model.", required=False, default=None)
     parser.add_argument(
-        "--n", type=int, help="n dim for matmul", required=False, default=3072)
+        "--m", type=int, help="m dim for matmul. Must match template mlir model.", required=True)
     parser.add_argument(
-        "--k", type=int, help="k dim for matmul", required=False, default=768)
+        "--n", type=int, help="n dim for matmul. Must match template mlir model.", required=True)
+    parser.add_argument(
+        "--k", type=int, help="k dim for matmul. Must match template mlir model.", required=True)
     parser.add_argument("--data_type",
                         type=DataType,
                         help="Numeric type of input matrices",
@@ -352,13 +478,8 @@ def parse_arguments():
     parser.add_argument("--template_mlir_model",
                         type=Path,
                         help="Path to input .mlir for profiling. Used as input to annotation and compilation. Args for dimensions and datatype must match.",
-                        required=False,
-                        default="/usr/local/google/home/kooljblack/Code/iree-tmp/batch_size/search/benchmark-tensorcore-input.mlir")
-    parser.add_argument("--artifacts_dir",
-                        type=dir_path,
-                        help="Path to dir to place annotated models and compiled artifacts for benchmarking. If not provied, a temp dir is used isntead",
-                        required=False,
-                        default="/usr/local/google/home/kooljblack/Code/iree-tmp/batch_size/search/")
+                        required=True,
+                        default=None)
     parser.add_argument("--extra_compilation_args",
                         type=list,
                         help="Extra arguments to be added to compilation",
@@ -366,8 +487,8 @@ def parse_arguments():
                         default=[])
     parser.add_argument("--output_csv",
                         type=Path,
-                        help="Path to store csv results",
-                        required=False,
+                        help="Path to csv file for results",
+                        required=True,
                         default=None)
     parser.add_argument("--benchmark_repetitions",
                         type=int,
@@ -398,120 +519,21 @@ def parse_arguments():
 
 
 def main(args: argparse.ArgumentParser):
-    print(
-        f"Profiling shape [{args.m},{args.n},{args.k}] on {args.target_backend} for optimal config.")
-
-    compilation_parallelism = args.compilation_parallelism
-
-    # Setup temporary dir for artifacts
-    temp_dir = None
-    artifacts_dir_path = None
-    if args.artifacts_dir:
-        artifacts_dir_path = args.artifacts_dir
-    else:
-        temp_dir = tempfile.TemporaryDirectory()
-        artifacts_dir_path = Path(temp_dir.name)
-
-    benchmark_repetitions = args.benchmark_repetitions
-    benchmark_dispatch_batch_size = args.benchmark_dispatch_batch_size
-
-    # Output CSV path
-    output_csv_path = args.output_csv
-    now = datetime.now()
-    if not output_csv_path:
-        dt = now.strftime("%Y-%m-%d_%I:%M:%S%p")
-        output_csv_path = artifacts_dir_path.joinpath(dt+"_results.csv")
-
-    benchmark_results_writer = ProfilerResultsWriter(
-        output_csv_path, benchmark_repetitions)
-    benchmark_results_writer.initialize_output_csv()
-
-    # Load template model
-    input_model_path = args.template_mlir_model
-    template_model_str = ""
-    with open(input_model_path, "r") as f:
-        template_model_str = f.read()
-
-    if not template_model_str:
-        raise ValueError("Unable to read template model.")
-
-    configs = generate_configs(pipeline=Pipeline.GPU_TENSORCORE, operation=OperationType.MATMUL, input_shape=[
-                               args.m, args.n, args.k], data_type=args.data_type)
-    print(f"Generated {len(configs)} configs for model.")
-
-    # Control config for first benchmark
-    configs.insert(0, CONTROL_CONFIG)
-
-    profiler_results = []
-
-    config_end_index = len(configs)
-    if args.config_end_index:
-        config_end_index = args.config_end_index
-    configs = configs[args.config_start_index:config_end_index]
-
-    # Grab up to compilation_parallelism configs. Group for subsequent iterations.
-    iter_configs = [iter(configs)] * compilation_parallelism
-    grouped_configs = zip_longest(fillvalue=None, *iter_configs)
-
-    tuning_start_time_s = time.time()
-
-    for group_index, config_group in enumerate(grouped_configs):
-        for index, config in enumerate(config_group):
-            config_index = group_index * compilation_parallelism + \
-                index + args.config_start_index
-            print(f"Testing config {config_index}/{len(configs)} : {config}")
-
-        # For each config, annotate the model, compile and benchmark
-        compilation_results = annotate_and_compile(
-            config_group,
-            template_model_str,
-            benchmark_dispatch_batch_size,
-            args.extra_compilation_args,
-            compilation_parallelism)
-
-        for index, compilation_result in enumerate(compilation_results):
-            config_index = group_index * compilation_parallelism + \
-                index + args.config_start_index
-            # Was compilation successful?
-            if not compilation_result.flatbuffer_blob:
-                print(f"Failed to compile {config_index}/{len(configs)}")
-                tuning_elapsed_time_s = time.time() - tuning_start_time_s
-                print(f"Tuned config {config_index}/{len(configs)} - total elapsed time: {timedelta(seconds=tuning_elapsed_time_s)}, compilation time: {compilation_result.compilation_time_s:0.4f}sec")
-                profiler_results.append(
-                    ProfilerResult.create_failed_compilation(config_index, compilation_result.config, compilation_result.err, compilation_result.compilation_time_s))
-                benchmark_results_writer.write_csv_result(profiler_results[-1])
-                continue
-
-            benchmark_start_time_s = time.time()
-
-            # Benchmark model
-            benchmark_results, err = run_benchmark_module(compilation_result.flatbuffer_blob, entry_function="forward",
-                                                          benchmark_repetitions=benchmark_repetitions, benchmark_dispatch_batch_size=benchmark_dispatch_batch_size)
-
-            benchmark_elapsed_time_s = time.time() - benchmark_start_time_s
-            tuning_elapsed_time_s = time.time() - tuning_start_time_s
-
-            # Was benchmark successful?
-            if err:
-                print(f"Failed to benchmark {config_index}/{len(configs)}")
-
-                print(f"Tuned config {config_index}/{len(configs)} - total elapsed time: {timedelta(seconds=tuning_elapsed_time_s)}, compilation time: {compilation_result.compilation_time_s:0.4f}sec, benchmark time: {benchmark_elapsed_time_s:0.4f}sec")
-                profiler_results.append(
-                    ProfilerResult.create_failed_benchmark(config_index, compilation_result.config, err, compilation_result.compilation_time_s, benchmark_elapsed_time_s))
-                benchmark_results_writer.write_csv_result(profiler_results[-1])
-            else:
-                print(f"Tuned config {config_index}/{len(configs)} - total elapsed time: {timedelta(seconds=tuning_elapsed_time_s)}, compilation time: {compilation_result.compilation_time_s:0.4f}sec, benchmark time: {benchmark_elapsed_time_s:0.4f}sec with {benchmark_results[0].iterations} iterations")
-                profiler_results.append(
-                    ProfilerResult.create_with_result(config_index, compilation_result.config, benchmark_results, compilation_result.compilation_time_s, benchmark_elapsed_time_s))
-                benchmark_results_writer.write_csv_result(profiler_results[-1])
-
-    print(f"Produced {len(profiler_results)} profile results.")
-
-    # Cleanup any artifacts
-    if temp_dir:
-        temp_dir.cleanup()
-
-    print(f"Results stored in: {output_csv_path}")
+    run_profile(
+        b=args.b,
+        m=args.m,
+        n=args.n,
+        k=args.k,
+        data_type=args.data_type,
+        target_backend=args.target_backend,
+        template_mlir_model_path=args.template_mlir_model,
+        extra_compilation_args=args.extra_compilation_args,
+        output_csv_path=args.output_csv,
+        benchmark_repetitions=args.benchmark_repetitions,
+        benchmark_dispatch_batch_size=args.benchmark_dispatch_batch_size,
+        compilation_parallelism=args.compilation_parallelism,
+        config_start_index=args.config_start_index,
+        config_end_index=args.config_end_index)
 
 
 if __name__ == "__main__":

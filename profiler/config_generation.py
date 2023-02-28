@@ -35,6 +35,7 @@ class DataType(enum.Enum):
     F16 = ("f16", 8)
 
     def __init__(self, value, bytes_size):
+        self.iree_type = value
         self.bytes_size = bytes_size
 
     @staticmethod
@@ -68,7 +69,8 @@ def generate_tile_sizes(pipeline: Pipeline, data_type: DataType, input_shape: Li
     # Batch dim tile is always 1 if it exists
     if len(input_shape) == 4:
         for tile_size in tile_sizes:
-            tile_size = [1] + tile_size
+            tile_size = list(tile_size)
+            tile_size.insert(0, 1)
 
     # Toss any config that does not divide the input shape
     def divides_shape(input_shape, tile_size):
@@ -196,16 +198,15 @@ def dump_shark_config_json(config: dict, output_path: Path):
         return f.write(json.dumps(config))
 
 
-def generate_configs(pipeline: Pipeline, operation: OperationType, input_shape: List[int], data_type: DataType, m: int = 4096, n: int = 3072, k: int = 768) -> List[dict]:
+def generate_configs(pipeline: Pipeline, operation: OperationType, input_shape: List[int], data_type: DataType) -> List[dict]:
     """Generates a list of configs based on options.
 
     Configs are returned asa list of dictionaries. Each config can be used to annotate model using sharks model_annotation.py
     """
 
-    input_shape = [m, n, k]
     configs = []
     tile_sizes = generate_tile_sizes(pipeline, data_type, input_shape)
-
+    
     for tile_size in tile_sizes:
         workgroup_sizes = generate_workgroup_sizes(
             pipeline, input_shape, tile_size)
@@ -215,6 +216,7 @@ def generate_configs(pipeline: Pipeline, operation: OperationType, input_shape: 
         # Create a config for each combination of tile, workgroup and pipeline
         for workgroup_size in workgroup_sizes:
             for pipeline_depth in pipeline_depths:
+                # print(f"***The input shape2: {input_shape}")
                 b = None
                 if len(input_shape) == 4:
                     b = input_shape[0]
@@ -230,6 +232,7 @@ def generate_configs(pipeline: Pipeline, operation: OperationType, input_shape: 
                     n=input_shape[1],
                     k=input_shape[2]
                 )
+                # print(f"The config dict: {config_dict}")
                 configs.append(config_dict)
     return configs
 
