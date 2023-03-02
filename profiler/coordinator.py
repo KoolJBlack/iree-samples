@@ -295,22 +295,22 @@ def parse_arguments():
                         type=Path,
                         help="Input model to analyze for tuning",
                         required=False,
-                        default="/usr/local/google/home/kooljblack/Code/iree-tmp/batch_size/ir_dump/B32/dump_after_tile_distribute_workgroups.mlir")
+                        default=None)
     parser.add_argument("--output_program_dump",
                         type=Path,
                         help="Output path to dump tuning programs",
                         required=False,
-                        default="/usr/local/google/home/kooljblack/Code/iree-tmp/tuning/artifacts/tuning_program.json")
+                        default=None)
     parser.add_argument("--input_program",
                         type=Path,
                         help="Input path to read tuning programs",
                         required=False,
-                        default="/usr/local/google/home/kooljblack/Code/iree-tmp/tuning/artifacts/tuning_program.json")
+                        default=None)
     parser.add_argument("--results_dir",
                         type=dir_path,
                         help="Path to dir to place results from profiler run",
                         required=False,
-                        default="/usr/local/google/home/kooljblack/Code/iree-tmp/tuning/results/")
+                        default=None)
     parser.add_argument("--benchmark_repetitions",
                         type=int,
                         help="Number of time to repeat each benchmark. The final result times are averaged",

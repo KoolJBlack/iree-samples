@@ -68,9 +68,7 @@ def generate_tile_sizes(pipeline: Pipeline, data_type: DataType, input_shape: Li
 
     # Batch dim tile is always 1 if it exists
     if len(input_shape) == 4:
-        for tile_size in tile_sizes:
-            tile_size = list(tile_size)
-            tile_size.insert(0, 1)
+        tile_sizes = [[1] + list(tile_size) for tile_size in tile_sizes]
 
     # Toss any config that does not divide the input shape
     def divides_shape(input_shape, tile_size):
@@ -83,6 +81,8 @@ def generate_tile_sizes(pipeline: Pipeline, data_type: DataType, input_shape: Li
 
     # Ensure shared memory usage <=64KB
     def fits_shared_mem(tile_size):
+        if len(tile_size) == 4:
+            tile_size = tile_size[1:]
         total_shared_mem_size = (
             tile_size[0] * tile_size[2] + tile_size[1] * tile_size[2]) * data_type.bytes_size
         shared_mem_bytes = 64 * 1024
@@ -122,6 +122,8 @@ def generate_workgroup_sizes(pipeline: Pipeline, input_shape: List[int], tile_si
         warp_size = 32
 
         def divides_tensorcore(tile_size, workgroup_size):
+            if len(tile_size) == 4:
+                tile_size = tile_size[1:]
             second_level_tile = [tile_size[0] / workgroup_size[1],
                                  tile_size[1] / (workgroup_size[0] / warp_size), tile_size[2]]
             # print(second_level_tile, workgroup_size)
@@ -139,9 +141,14 @@ def generate_pipeline_depth(pipeline: Pipeline, input_shape: List[int], tile_siz
     """"Returns list of possible pipeline depth"""
     if pipeline != Pipeline.GPU_TENSORCORE:
         return []
+
     # Can only software pipeline if tile size is smaller than K
-    if tile_size[2] == input_shape[1]:
-        return []
+    if len(input_shape) == 4:
+        if tile_size[3] == input_shape[2]:
+            return [1]
+    if len(input_shape) == 3:
+        if tile_size[2] == input_shape[1]:
+            return [1]
     # For tensorcore, usually between 1 and 12, increments of 1
     return [x for x in range(1, 6)]
 
@@ -203,10 +210,9 @@ def generate_configs(pipeline: Pipeline, operation: OperationType, input_shape: 
 
     Configs are returned asa list of dictionaries. Each config can be used to annotate model using sharks model_annotation.py
     """
-
     configs = []
     tile_sizes = generate_tile_sizes(pipeline, data_type, input_shape)
-    
+
     for tile_size in tile_sizes:
         workgroup_sizes = generate_workgroup_sizes(
             pipeline, input_shape, tile_size)
@@ -216,23 +222,26 @@ def generate_configs(pipeline: Pipeline, operation: OperationType, input_shape: 
         # Create a config for each combination of tile, workgroup and pipeline
         for workgroup_size in workgroup_sizes:
             for pipeline_depth in pipeline_depths:
-                # print(f"***The input shape2: {input_shape}")
                 b = None
+                m = input_shape[0]
+                n = input_shape[1]
+                k = input_shape[2]
                 if len(input_shape) == 4:
                     b = input_shape[0]
-                    input_shape = input_shape[1:]
+                    m = input_shape[1]
+                    n = input_shape[2]
+                    k = input_shape[3]
                 config_dict = assemble_config_object(
                     tile_size=tile_size,
                     workgroup_size=workgroup_size,
                     pipeline_name=pipeline.name,
                     pipeline_depth=pipeline_depth,
-                    identifier="matmul",
+                    identifier=operation.value,
                     b=b,
-                    m=input_shape[0],
-                    n=input_shape[1],
-                    k=input_shape[2]
+                    m=m,
+                    n=n,
+                    k=k
                 )
-                # print(f"The config dict: {config_dict}")
                 configs.append(config_dict)
     return configs
 

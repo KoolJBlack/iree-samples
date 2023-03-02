@@ -74,7 +74,6 @@ def load_model_configs(input_configs: List[str]):
     # with open(config_path, "r") as f:
     for line in input_configs:
         data = json.loads(line)
-
         if "identifier" not in data.keys():
             continue
         if data["identifier"] == "matmul":

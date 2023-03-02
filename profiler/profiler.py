@@ -242,7 +242,6 @@ def compile_module_to_flatbuffer(
         flatbuffer_blob = None
         print(f"Compile tool failed: {err}")
         return None, err
-
     return flatbuffer_blob, None
 
 
@@ -375,7 +374,6 @@ def run_profile(
 
     if not template_model_str:
         raise ValueError("Unable to read template model.")
-
 
     input_shape = [int(m), int(n), int(k)]
     if b:
