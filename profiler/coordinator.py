@@ -125,24 +125,24 @@ def generate_temp_file(
     """Spits out a template mlir model for given program params."""
     matmul_template = f"""
     func.func @benchmark_matmul_tensorcore() -> tensor<{m}x{n}x{data_type.iree_type}> {{
-        %ins = arith.constant dense<1.0> : tensor<{m}x{k}x{data_type.iree_type}>
-        %cst = arith.constant 0.707106769 : {data_type.iree_type}
-        %cst_1 = arith.constant dense<1.0> : tensor<{k}x{n}x{data_type.iree_type}>
-        %46 = tensor.empty() : tensor<{m}x{n}x{data_type.iree_type}>
-        %47 = linalg.fill ins(%cst : {data_type.iree_type}) outs(%46 : tensor<{m}x{n}x{data_type.iree_type}>) -> tensor<{m}x{n}x{data_type.iree_type}>
-        %48 = linalg.matmul ins(%ins, %cst_1 : tensor<{m}x{k}x{data_type.iree_type}>, tensor<{k}x{n}x{data_type.iree_type}>) outs(%47 : tensor<{m}x{n}x{data_type.iree_type}>) -> tensor<{m}x{n}x{data_type.iree_type}>
-        return %48 : tensor<{m}x{n}x{data_type.iree_type}>
+        %cst = arith.constant 1.0 : {data_type.iree_type}
+        %lhs = arith.constant dense<1.0> : tensor<{m}x{k}x{data_type.iree_type}>
+        %rhs = arith.constant dense<1.0> : tensor<{k}x{n}x{data_type.iree_type}>
+        %empty = tensor.empty() : tensor<{m}x{n}x{data_type.iree_type}>
+        %filled = linalg.fill ins(%cst : {data_type.iree_type}) outs(%empty : tensor<{m}x{n}x{data_type.iree_type}>) -> tensor<{m}x{n}x{data_type.iree_type}>
+        %result = linalg.matmul ins(%lhs, %rhs : tensor<{m}x{k}x{data_type.iree_type}>, tensor<{k}x{n}x{data_type.iree_type}>) outs(%filled : tensor<{m}x{n}x{data_type.iree_type}>) -> tensor<{m}x{n}x{data_type.iree_type}>
+        return %result : tensor<{m}x{n}x{data_type.iree_type}>
     }}
     """
     batch_matmul_template = f"""
     func.func @benchmark_batch_matmul_tensorcore() -> tensor<{b}x{m}x{n}x{data_type.iree_type}> {{
-        %ins = arith.constant dense<1.0> : tensor<{b}x{m}x{k}x{data_type.iree_type}>
-        %cst = arith.constant 0.707106769 : {data_type.iree_type}
-        %cst_1 = arith.constant dense<1.0> : tensor<{b}x{k}x{n}x{data_type.iree_type}>
-        %46 = tensor.empty() : tensor<{b}x{m}x{n}x{data_type.iree_type}>
-        %47 = linalg.fill ins(%cst : {data_type.iree_type}) outs(%46 : tensor<{b}x{m}x{n}x{data_type.iree_type}>) -> tensor<{b}x{m}x{n}x{data_type.iree_type}>
-        %48 = linalg.batch_matmul ins(%ins, %cst_1 : tensor<{b}x{m}x{k}x{data_type.iree_type}>, tensor<{b}x{k}x{n}x{data_type.iree_type}>) outs(%47 : tensor<{b}x{m}x{n}x{data_type.iree_type}>) -> tensor<{b}x{m}x{n}x{data_type.iree_type}>
-        return %48 : tensor<{b}x{m}x{n}x{data_type.iree_type}>
+        %cst = arith.constant 1.0 : {data_type.iree_type}
+        %lhs = arith.constant dense<1.0> : tensor<{b}x{m}x{k}x{data_type.iree_type}>
+        %rhs = arith.constant dense<1.0> : tensor<{b}x{k}x{n}x{data_type.iree_type}>
+        %empty = tensor.empty() : tensor<{b}x{m}x{n}x{data_type.iree_type}>
+        %filled = linalg.fill ins(%cst : {data_type.iree_type}) outs(%empty : tensor<{b}x{m}x{n}x{data_type.iree_type}>) -> tensor<{b}x{m}x{n}x{data_type.iree_type}>
+        %result = linalg.batch_matmul ins(%lhs, %rhs : tensor<{b}x{m}x{k}x{data_type.iree_type}>, tensor<{b}x{k}x{n}x{data_type.iree_type}>) outs(%filled : tensor<{b}x{m}x{n}x{data_type.iree_type}>) -> tensor<{b}x{m}x{n}x{data_type.iree_type}>
+        return %result : tensor<{b}x{m}x{n}x{data_type.iree_type}>
     }}
     """
     selected_template = None
@@ -254,7 +254,8 @@ def run_program(
                 break
             profiler_programs.append(ProfilerProgram.load_json(line))
 
-    print(f"Loaded {len(profiler_programs)} ProfilePrograms from: {input_program_path}")
+    print(
+        f"Loaded {len(profiler_programs)} ProfilePrograms from: {input_program_path}")
 
     for profiler_program in profiler_programs:
         template_mlir_model_path = results_dir_path.joinpath(
@@ -283,6 +284,43 @@ def run_program(
             operation_type=profiler_program.operation_type)
         print(f"Finished program: {profiler_program.name}")
 
+
+def combine_programs(
+        input_program_dir: Path,
+        output_program_path: Path):
+    """Combines input programs from a dir into a single output program. Removes duplicate programs."""
+
+    raw_program_count = 0
+    input_file_count = 0
+    profiler_programs_dict = {}
+    for child in input_program_dir.iterdir():
+        if child.suffix != ".json":
+            continue
+
+        # Skip the output file if its in the same dir
+        if child.absolute() == output_program_path.absolute():
+            continue
+
+        input_file_count += 1
+        with open(child, "r") as f:
+            for line in f.readlines():
+                raw_program_count += 1
+                profiler_program = ProfilerProgram.load_json(line.rstrip())
+                program_name = profiler_program.name
+                if program_name in profiler_programs_dict.keys():
+                    continue
+
+                profiler_programs_dict[program_name] = profiler_program
+
+    # Dump the profiler programs
+    with open(output_program_path, "w") as f:
+        for profiler_program in profiler_programs_dict.values():
+            json_str = profiler_program.dump_json()
+            f.write(json_str + "\n")
+
+    print(f"Combined {input_file_count} tuning programs with {raw_program_count} programs into {len(profiler_programs_dict.values())} unique programs.")
+
+
 def parse_arguments():
     parser = argparse.ArgumentParser(
         description="Coordinator for running the profiler over one or more sessions.")
@@ -291,6 +329,7 @@ def parse_arguments():
                         choices=["dump", "combine", "run"],
                         help="Set mode for profiler coordinator.",
                         required=True)
+    # Dump
     parser.add_argument("--input_mlir_model",
                         type=Path,
                         help="Input model to analyze for tuning",
@@ -301,6 +340,7 @@ def parse_arguments():
                         help="Output path to dump tuning programs",
                         required=False,
                         default=None)
+    # Run
     parser.add_argument("--input_program",
                         type=Path,
                         help="Input path to read tuning programs",
@@ -321,6 +361,18 @@ def parse_arguments():
                         help="Number of iterations for each dispatch in benchmark",
                         required=False,
                         default=400)
+    # Combine
+    parser.add_argument("--input_programs_dir",
+                        type=dir_path,
+                        help="Path to dir containing programs to combine",
+                        required=False,
+                        default=None)
+    parser.add_argument("--output_combined_program",
+                        type=Path,
+                        help="Path to combined program",
+                        required=False,
+                        default=None)
+
     return parser.parse_args()
 
 
@@ -328,7 +380,7 @@ def main(args: argparse.ArgumentParser):
     if args.mode == "dump":
         dump_profile_programs(args.input_mlir_model, args.output_program_dump)
     if args.mode == "combine":
-        raise RuntimeError("Not implemented yet.")
+        combine_programs(args.input_programs_dir, args.output_combined_program)
     if args.mode == "run":
         run_program(
             args.input_program,

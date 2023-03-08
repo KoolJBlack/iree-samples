@@ -215,7 +215,7 @@ def compile_module_to_flatbuffer(
     """Compiles mlir module and returns the flatbuffer blob"""
     args = []
     if target_device == "cuda":
-        args.extend(['--iree-llvm-target-cpu-features=host', '--iree-mhlo-demote-i64-to-i32=false', '--iree-flow-demote-i64-to-i32',
+        args.extend(['--iree-llvmcpu-target-cpu-features=host', '--iree-mhlo-demote-i64-to-i32=false', '--iree-flow-demote-i64-to-i32',
                     '--iree-hal-cuda-disable-loop-nounroll-wa', '--iree-stream-resource-index-bits=64', '--iree-vm-target-index-bits=64', '--iree-util-zero-fill-elided-attrs'])
         args.append('--iree-hal-cuda-llvm-target-arch=sm_80')
 
