@@ -90,10 +90,10 @@ class ProfilerResultsWriter:
             "tile_sizes", "work_group_sizes", "pipeline", "pipeline_depth", "identifier", "b", "m", "n", "k",
             "benchmark_repetitions",
             "iterations",
-            "time_mean", "cpu_time_mean",
-            "time_median", "cpu_time_median",
-            "time_std", "cpu_time_std",
-            "time_cv", "cpu_time_cv",
+            "time_mean_milliseconds", "cpu_time_mean_milliseconds",
+            "time_median_milliseconds", "cpu_time_median_milliseconds",
+            "time_std_milliseconds", "cpu_time_std_milliseconds",
+            "time_cv_milliseconds", "cpu_time_cv_milliseconds",
             "compilation_time_seconds", "benchmark_time_seconds",
             "error",
         ]
@@ -151,18 +151,21 @@ class ProfilerResultsWriter:
             benchmark_name = benchmark_results_remaining[0].benchmark_name
             iterations = benchmark_results_remaining[0].iterations
 
+            def strip_ms(raw_time: str):
+                return raw_time.split(" ")[0]
+
             bench_result.update({
                 "benchmark_name": benchmark_name,
                 "benchmark_repetitions": len(benchmark_results_remaining),
                 "iterations": iterations,
-                "time_mean": benchmark_result_mean.time,
-                "cpu_time_mean": benchmark_result_mean.cpu_time,
-                "time_median": benchmark_result_median.time,
-                "cpu_time_median": benchmark_result_median.cpu_time,
-                "time_std": benchmark_result_std.time,
-                "cpu_time_std": benchmark_result_std.cpu_time,
-                "time_cv": benchmark_result_cv.time,
-                "cpu_time_cv": benchmark_result_cv.cpu_time,
+                "time_mean_milliseconds": strip_ms(benchmark_result_mean.time),
+                "cpu_time_mean_milliseconds": strip_ms(benchmark_result_mean.cpu_time),
+                "time_median_milliseconds": strip_ms(benchmark_result_median.time),
+                "cpu_time_median_milliseconds": strip_ms(benchmark_result_median.cpu_time),
+                "time_std_milliseconds": strip_ms(benchmark_result_std.time),
+                "cpu_time_std_milliseconds": strip_ms(benchmark_result_std.cpu_time),
+                "time_cv_milliseconds": strip_ms(benchmark_result_cv.time),
+                "cpu_time_cv_milliseconds": strip_ms(benchmark_result_cv.cpu_time),
             })
         bench_result.update({"error": err})
 
