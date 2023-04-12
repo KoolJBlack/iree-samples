@@ -24,7 +24,7 @@ import iree.runtime as ireert
 import iree.compiler as ireec
 
 from config_generation import Pipeline, OperationType, DataType, generate_configs, CONTROL_CONFIG
-
+from results.results import ProfilerResult, ProfilerResultsWriter
 
 @enum.unique
 class TargetBackend(enum.Enum):
@@ -40,138 +40,6 @@ class TargetBackend(enum.Enum):
         except KeyError:
             raise ValueError()
 
-
-class ProfilerResult:
-    """Stores the results of each profile based on config."""
-    # TODO: capture errors?
-
-    def __init__(self,
-                 config_index: int,
-                 config: dict,
-                 compilation_successful: bool,
-                 benchmark_successful: bool,
-                 benchmark_results: List[BenchmarkResult] = [],
-                 compiler_error: Optional[CompilerToolError] = None,
-                 benchmark_error: Optional[BenchmarkToolError] = None,
-                 compilation_time: Optional[float] = None,
-                 benchmark_time: Optional[float] = None):
-        self.config_index = config_index
-        self.config = config
-        self.compilation_successful = compilation_successful
-        self.benchmark_successful = benchmark_successful
-        self.benchmark_results = benchmark_results
-        self.compiler_error = compiler_error
-        self.benchmark_error = benchmark_error
-        self.compilation_time = compilation_time
-        self.benchmark_time = benchmark_time
-
-    @staticmethod
-    def create_with_result(config_index: int, config: dict, benchmark_results: List[BenchmarkResult], compilation_time: float, benchmark_time: float):
-        return ProfilerResult(config_index, config, True, True, benchmark_results, compilation_time=compilation_time, benchmark_time=benchmark_time)
-
-    @staticmethod
-    def create_failed_compilation(config_index: int, config: dict, compiler_error: CompilerToolError, compilation_time: float):
-        return ProfilerResult(config_index, config, False, False, None, compiler_error=compiler_error, compilation_time=compilation_time)
-
-    @staticmethod
-    def create_failed_benchmark(config_index: int, config: dict, benchmark_error: BenchmarkToolError, compilation_time: float, benchmark_time: float):
-        return ProfilerResult(config_index, config, True, False, None, benchmark_error=benchmark_error, compilation_time=compilation_time, benchmark_time=benchmark_time)
-
-
-class ProfilerResultsWriter:
-    """Class for writing benchmark results to CSV."""
-
-    def __init__(self, output_csv_path: Path, benchmark_repetitions: int):
-        self.output_csv_path = output_csv_path
-        self.benchmark_repetitions = benchmark_repetitions
-        self.field_names = [
-            "config_index",
-            "benchmark_name",
-            "tile_sizes", "work_group_sizes", "pipeline", "pipeline_depth", "identifier", "b", "m", "n", "k",
-            "benchmark_repetitions",
-            "iterations",
-            "time_mean_milliseconds", "cpu_time_mean_milliseconds",
-            "time_median_milliseconds", "cpu_time_median_milliseconds",
-            "time_std_milliseconds", "cpu_time_std_milliseconds",
-            "time_cv_milliseconds", "cpu_time_cv_milliseconds",
-            "compilation_time_seconds", "benchmark_time_seconds",
-            "error",
-        ]
-
-    def initialize_output_csv(self):
-        """Setup CSV output if it doesn't exist."""
-
-        if not self.output_csv_path.exists():
-            with open(self.output_csv_path, mode="w", newline="") as csv_f:
-                writer = csv.writer(csv_f)
-                writer.writerow(self.field_names)
-
-    def write_csv_result(self, profiler_result: ProfilerResult):
-        """Save a profile result to csv."""
-        # Config info
-        config = profiler_result.config
-        config_options = config["options"][0]
-        pipeline_depth = 0
-        if "pipeline_depth" in config_options.keys():
-            pipeline_depth = config_options["pipeline_depth"]
-        b = 0
-        if "b" in config.keys():
-            b = config["b"]
-
-        bench_result = {
-            "config_index": profiler_result.config_index,
-            "tile_sizes": str(config_options["work_group_tile_sizes"])[1:-1],
-            "work_group_sizes": str(config_options["work_group_sizes"])[1:-1],
-            "pipeline": config_options["pipeline"],
-            "pipeline_depth": pipeline_depth,
-            "identifier": config["identifier"],
-            "b": b,
-            "m": config["m"],
-            "n": config["n"],
-            "k": config["k"],
-            "compilation_time_seconds": profiler_result.compilation_time,
-            "benchmark_time_seconds": profiler_result.benchmark_time,
-        }
-
-        err = None
-        if not profiler_result.compilation_successful:
-            err = str(profiler_result.compiler_error).replace('\n', '|')
-            # err = str(profiler_result.compiler_error)
-        elif not profiler_result.benchmark_successful:
-            # TODO: capture error
-            err = str(profiler_result.benchmark_error)
-        else:
-            # Pull key benchmark metrics
-            benchmark_results = profiler_result.benchmark_results
-            benchmark_result_mean = benchmark_results[-4]
-            benchmark_result_median = benchmark_results[-3]
-            benchmark_result_std = benchmark_results[-2]
-            benchmark_result_cv = benchmark_results[-1]
-            benchmark_results_remaining = benchmark_results[:-4]
-            benchmark_name = benchmark_results_remaining[0].benchmark_name
-            iterations = benchmark_results_remaining[0].iterations
-
-            def strip_ms(raw_time: str):
-                return raw_time.split(" ")[0]
-
-            bench_result.update({
-                "benchmark_name": benchmark_name,
-                "benchmark_repetitions": len(benchmark_results_remaining),
-                "iterations": iterations,
-                "time_mean_milliseconds": strip_ms(benchmark_result_mean.time),
-                "cpu_time_mean_milliseconds": strip_ms(benchmark_result_mean.cpu_time),
-                "time_median_milliseconds": strip_ms(benchmark_result_median.time),
-                "cpu_time_median_milliseconds": strip_ms(benchmark_result_median.cpu_time),
-                "time_std_milliseconds": strip_ms(benchmark_result_std.time),
-                "cpu_time_std_milliseconds": strip_ms(benchmark_result_std.cpu_time),
-                "time_cv_milliseconds": strip_ms(benchmark_result_cv.time),
-                "cpu_time_cv_milliseconds": strip_ms(benchmark_result_cv.cpu_time),
-            })
-        bench_result.update({"error": err})
-
-        with open(self.output_csv_path, mode="a", newline="") as csv_f:
-            writer = csv.DictWriter(csv_f, fieldnames=self.field_names)
-            writer.writerow(bench_result)
 
 
 def create_context() -> ir.Context:
@@ -366,7 +234,7 @@ def run_profile(
         raise ValueError("Output CSV path required.")
 
     benchmark_results_writer = ProfilerResultsWriter(
-        output_csv_path, benchmark_repetitions)
+        output_csv_path)
     benchmark_results_writer.initialize_output_csv()
 
     # Load template model
