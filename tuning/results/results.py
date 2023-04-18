@@ -65,20 +65,20 @@ class ProfilerResult:
         self.benchmark_time = benchmark_time
         self.build_dict()
 
-    def __init__(self, profiler_result_dict: dict):
-        self.profiler_result_dict = profiler_result_dict
-        config_options = {}
-        config_options["work_group_tile_sizes"] = profiler_result_dict[PROFILER_RESULT_KEYS.TILE_SIZE]
-        config_options["work_group_sizes"]= profiler_result_dict[PROFILER_RESULT_KEYS.WORK_GROUP_SIZES]
-        config_options["pipeline"]= profiler_result_dict[PROFILER_RESULT_KEYS.PIPELINE]
-        config_options["pipeline_depth"]= profiler_result_dict[PROFILER_RESULT_KEYS.PIPELINE_DEPTH]
-        config = {}
-        config["options"] = [config_options]
-        config["identifier"] = profiler_result_dict[PROFILER_RESULT_KEYS.IDENTIFIER]
-        config["b"] = profiler_result_dict[PROFILER_RESULT_KEYS.B]
-        config["m"] = profiler_result_dict[PROFILER_RESULT_KEYS.M]
-        config["n"] = profiler_result_dict[PROFILER_RESULT_KEYS.N]
-        config["k"] = profiler_result_dict[PROFILER_RESULT_KEYS.K]
+    # def __init__(self, profiler_result_dict: dict):
+    #     self.profiler_result_dict = profiler_result_dict
+    #     config_options = {}
+    #     config_options["work_group_tile_sizes"] = profiler_result_dict[PROFILER_RESULT_KEYS.TILE_SIZE]
+    #     config_options["work_group_sizes"]= profiler_result_dict[PROFILER_RESULT_KEYS.WORK_GROUP_SIZES]
+    #     config_options["pipeline"]= profiler_result_dict[PROFILER_RESULT_KEYS.PIPELINE]
+    #     config_options["pipeline_depth"]= profiler_result_dict[PROFILER_RESULT_KEYS.PIPELINE_DEPTH]
+    #     config = {}
+    #     config["options"] = [config_options]
+    #     config["identifier"] = profiler_result_dict[PROFILER_RESULT_KEYS.IDENTIFIER]
+    #     config["b"] = profiler_result_dict[PROFILER_RESULT_KEYS.B]
+    #     config["m"] = profiler_result_dict[PROFILER_RESULT_KEYS.M]
+    #     config["n"] = profiler_result_dict[PROFILER_RESULT_KEYS.N]
+    #     config["k"] = profiler_result_dict[PROFILER_RESULT_KEYS.K]
 
     def build_dict(self):
         config = self.config

@@ -87,7 +87,7 @@ def compile_module_to_flatbuffer(
     args = []
     if target_device == "cuda":
         args.extend(['--iree-llvmcpu-target-cpu-features=host', '--iree-mhlo-demote-i64-to-i32=false', '--iree-flow-demote-i64-to-i32',
-                    '--iree-hal-cuda-disable-loop-nounroll-wa', '--iree-stream-resource-index-bits=64', '--iree-vm-target-index-bits=64', '--iree-util-zero-fill-elided-attrs'])
+                    '--iree-stream-resource-index-bits=64', '--iree-vm-target-index-bits=64', '--iree-util-zero-fill-elided-attrs'])
         args.append('--iree-hal-cuda-llvm-target-arch=sm_80')
 
     else:
