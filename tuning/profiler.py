@@ -1,12 +1,8 @@
-#!/usr/bin/env python3
-
+import sys
 import os
 import argparse
-import enum
-import tempfile
 from pathlib import Path
 from typing import Optional, List, Tuple
-import csv
 from datetime import datetime
 import concurrent.futures
 import json
@@ -24,23 +20,9 @@ import iree.runtime as ireert
 import iree.compiler as ireec
 
 from config_generation import Pipeline, OperationType, DataType, generate_configs, CONTROL_CONFIG
+from utils.data_types import TargetBackend, TargetDevice, TargetDriver, CompilerFrontend, CompilationResult
+from utils.iree_utils import  CudaFlavors, iree_compile_arguments
 from results.results import ProfilerResult, ProfilerResultsWriter
-
-@enum.unique
-class TargetBackend(enum.Enum):
-    CUDA = "cuda"
-
-    def __str__(self):
-        return self.name
-
-    @staticmethod
-    def from_string(s: str):
-        try:
-            return TargetBackend[s]
-        except KeyError:
-            raise ValueError()
-
-
 
 def create_context() -> ir.Context:
     context = ir.Context()
@@ -79,17 +61,14 @@ def annotate_mlir_model(
 
 def compile_module_to_flatbuffer(
         module,
-        target_device: str,
-        frontend: str,
+        target_device: TargetDevice,
+        frontend: CompilerFrontend = CompilerFrontend.MHLO ,
         benchmark_dispatch_batch_size: Optional[int] = None,
         extra_args: Optional[List] = []) -> tuple[Optional[bytes], Optional[CompilerToolError]]:
     """Compiles mlir module and returns the flatbuffer blob"""
     args = []
-    if target_device == "cuda":
-        args.extend(['--iree-llvmcpu-target-cpu-features=host', '--iree-mhlo-demote-i64-to-i32=false', '--iree-flow-demote-i64-to-i32',
-                    '--iree-stream-resource-index-bits=64', '--iree-vm-target-index-bits=64', '--iree-util-zero-fill-elided-attrs'])
-        args.append('--iree-hal-cuda-llvm-target-arch=sm_80')
-
+    if target_device == TargetDevice.CUDA:
+        args.extend(iree_compile_arguments(TargetBackend.CUDA, [CudaFlavors.SHARK_DEFAULT, CudaFlavors.CUDA_SM_80]))
     else:
         raise ValueError(
             "Only `cuda` target device is supported for benchmarking")
@@ -116,15 +95,9 @@ def compile_module_to_flatbuffer(
     return flatbuffer_blob, None
 
 
-@dataclass
-class CompilationResult:
-    config: dict
-    flatbuffer_blob: Optional[bytes]
-    err: Optional[str]
-    compilation_time_s: float
-
 
 def annotate_and_compile(
+        target_device : TargetDevice,
         configs: List[dict],
         operation_type: OperationType,
         template_model_str: str,
@@ -142,11 +115,9 @@ def annotate_and_compile(
         else:
             annotated_model = annotate_mlir_model(
                 input_model_str=template_model_str, config_json=json.dumps(config), operation_type=operation_type)
-
         # Compile model
         flatbuffer_blob, err = compile_module_to_flatbuffer(
-            str(annotated_model), "cuda", "mhlo", benchmark_dispatch_batch_size, extra_compilation_args)
-
+            str(annotated_model), target_device, CompilerFrontend.MHLO, benchmark_dispatch_batch_size, extra_compilation_args)
         elapsed_time = time.time() - start_time
         return CompilationResult(config, flatbuffer_blob, err, elapsed_time)
 
@@ -175,8 +146,8 @@ def run_benchmark_module(
         flatbuffer_blob: bytes,
         entry_function: str,
         function_input: List[str] = [],
-        device: str = "cuda",
-        driver: str = "cuda",
+        device: TargetDevice = TargetDevice.CUDA,
+        driver: TargetDriver = TargetDriver.CUDA,
         benchmark_repetitions: Optional[int] = None,
         benchmark_dispatch_batch_size: Optional[int] = None) -> Tuple[List[BenchmarkResult], Optional[BenchmarkToolError]]:
     # Create a module
@@ -224,8 +195,7 @@ def run_profile(
         config_end_index: Optional[int] = None):
     """Run the profiler."""
     print(
-        f"Profiling shape [{b}, {m},{n},{k}] on {target_backend} for optimal config.")
-
+        f"Profiling shape [{b}, {m},{n},{k}] on {target_backend} backend for optimal config.")
     compilation_parallelism = compilation_parallelism
 
     # Output CSV path
@@ -269,6 +239,10 @@ def run_profile(
 
     tuning_start_time_s = time.time()
 
+    target_device = None
+    if target_backend == TargetBackend.CUDA:
+        target_device = TargetDevice.CUDA
+
     for group_index, config_group in enumerate(grouped_configs):
         for index, config in enumerate(config_group):
             config_index = group_index * compilation_parallelism + \
@@ -277,6 +251,7 @@ def run_profile(
 
         # For each config, annotate the model, compile and benchmark
         compilation_results = annotate_and_compile(
+            target_device,
             config_group,
             operation_type,
             template_model_str,

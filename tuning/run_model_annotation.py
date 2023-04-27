@@ -20,22 +20,10 @@ import iree.runtime as ireert
 import iree.compiler as ireec
 
 from config_generation import Pipeline, OperationType, DataType, generate_configs
+from tuning.utils.data_types import TargetBackend
 
 # ====== IREE Specific ======
 
-@enum.unique
-class TargetBackend(enum.Enum):
-    CUDA = "cuda"
-
-    def __str__(self):
-        return self.name
-
-    @staticmethod
-    def from_string(s: str):
-        try:
-            return TargetBackend[s]
-        except KeyError:
-            raise ValueError()
 
 
 def create_context() -> ir.Context:

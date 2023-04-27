@@ -1,18 +1,14 @@
-#!/usr/bin/env python3
-
-import sys
 import os
 import argparse
 from pathlib import Path
 from typing import Optional, List, Tuple
 import re
-import enum
 from dataclasses import dataclass
-import json
 
 from config_generation import Pipeline, OperationType, DataType, generate_configs, CONTROL_CONFIG
 from profiler import run_profile, TargetBackend
-
+from model.model_generator import generate_temp_file
+from utils.data_types import OperationType, ProfilerProgram
 
 def dir_path(string) -> Optional[Path]:
     """Returns path to dir if it exists"""
@@ -21,140 +17,6 @@ def dir_path(string) -> Optional[Path]:
     else:
         raise NotADirectoryError(string)
         # return None
-
-
-@enum.unique
-class Operation(enum.Enum):
-    MATMUL = "matmul"
-    BATCH_MATMUL = "batch_matmul"
-    GENERIC = "generic"
-
-
-@dataclass
-class ProfilerProgram:
-    """Defines a run for the profiler and results to collect."""
-    name: str
-    b: int
-    m: int
-    n: int
-    k: int
-    data_type: DataType
-    operation_type: OperationType
-    target_backend: TargetBackend
-    pipeline: Pipeline
-    template_mlir_filename: str
-    output_csv_filename: str
-
-    def dump_json(self) -> str:
-        json_dict = {
-            "name": self.name,
-            "b": self.b,
-            "m": self.m,
-            "n": self.n,
-            "k": self.k,
-            "data_type": self.data_type.iree_type,
-            "operation_type": self.operation_type.value,
-            "target_backend": self.target_backend.value,
-            "pipeline": self.pipeline.value,
-            "template_mlir_filename": self.template_mlir_filename,
-            "output_csv_filename": self.output_csv_filename
-
-        }
-        return json.dumps(json_dict)
-
-    @classmethod
-    def load_json(cls, json_str: str):
-        json_dict = json.loads(json_str)
-
-        data_type = None
-        if json_dict["data_type"] == DataType.I8.iree_type:
-            data_type = DataType.I8
-        if json_dict["data_type"] == DataType.F16.iree_type:
-            data_type = DataType.F16
-        if json_dict["data_type"] == DataType.I32.iree_type:
-            data_type = DataType.I32
-        if json_dict["data_type"] == DataType.F32.iree_type:
-            data_type = DataType.F32
-
-        # operation = None
-        # if json_dict["operation"] == Operation.MATMUL.value:
-        #     operation = Operation.MATMUL
-        # if json_dict["operation"] == Operation.BATCH_MATMUL.value:
-        #     operation = Operation.BATCH_MATMUL
-
-        operation_type = None
-        if json_dict["operation_type"] == OperationType.MATMUL.value:
-            operation_type = OperationType.MATMUL
-        if json_dict["operation_type"] == OperationType.BATCH_MATMUL.value:
-            operation_type = OperationType.BATCH_MATMUL
-
-        target_backend = TargetBackend.CUDA
-        if json_dict["target_backend"] != TargetBackend.CUDA.value:
-            raise ValueError("Only target backend CUDA supported")
-
-        pipeline = None
-        if json_dict["pipeline"] == Pipeline.GPU_TENSORCORE.value:
-            pipeline = Pipeline.GPU_TENSORCORE
-        if json_dict["pipeline"] == Pipeline.GPU_SIMT.value:
-            pipeline = Pipeline.GPU_SIMT
-
-        return ProfilerProgram(
-            name=json_dict["name"],
-            b=json_dict["b"],
-            m=json_dict["m"],
-            n=json_dict["n"],
-            k=json_dict["k"],
-            data_type=data_type,
-            operation_type=operation_type,
-            target_backend=target_backend,
-            pipeline=pipeline,
-            template_mlir_filename=json_dict["template_mlir_filename"],
-            output_csv_filename=json_dict["output_csv_filename"],
-        )
-
-
-def generate_temp_file(
-        b: int,
-        m: int,
-        n: int,
-        k: int,
-        data_type: DataType,
-        operation: Operation,
-        template_mlir_model_path: Path,
-):
-    """Spits out a template mlir model for given program params."""
-    matmul_template = f"""
-    func.func @benchmark_matmul_tensorcore() -> tensor<{m}x{n}x{data_type.iree_type}> {{
-        %cst = arith.constant 1.0 : {data_type.iree_type}
-        %lhs = arith.constant dense<1.0> : tensor<{m}x{k}x{data_type.iree_type}>
-        %rhs = arith.constant dense<1.0> : tensor<{k}x{n}x{data_type.iree_type}>
-        %empty = tensor.empty() : tensor<{m}x{n}x{data_type.iree_type}>
-        %filled = linalg.fill ins(%cst : {data_type.iree_type}) outs(%empty : tensor<{m}x{n}x{data_type.iree_type}>) -> tensor<{m}x{n}x{data_type.iree_type}>
-        %result = linalg.matmul ins(%lhs, %rhs : tensor<{m}x{k}x{data_type.iree_type}>, tensor<{k}x{n}x{data_type.iree_type}>) outs(%filled : tensor<{m}x{n}x{data_type.iree_type}>) -> tensor<{m}x{n}x{data_type.iree_type}>
-        return %result : tensor<{m}x{n}x{data_type.iree_type}>
-    }}
-    """
-    batch_matmul_template = f"""
-    func.func @benchmark_batch_matmul_tensorcore() -> tensor<{b}x{m}x{n}x{data_type.iree_type}> {{
-        %cst = arith.constant 1.0 : {data_type.iree_type}
-        %lhs = arith.constant dense<1.0> : tensor<{b}x{m}x{k}x{data_type.iree_type}>
-        %rhs = arith.constant dense<1.0> : tensor<{b}x{k}x{n}x{data_type.iree_type}>
-        %empty = tensor.empty() : tensor<{b}x{m}x{n}x{data_type.iree_type}>
-        %filled = linalg.fill ins(%cst : {data_type.iree_type}) outs(%empty : tensor<{b}x{m}x{n}x{data_type.iree_type}>) -> tensor<{b}x{m}x{n}x{data_type.iree_type}>
-        %result = linalg.batch_matmul ins(%lhs, %rhs : tensor<{b}x{m}x{k}x{data_type.iree_type}>, tensor<{b}x{k}x{n}x{data_type.iree_type}>) outs(%filled : tensor<{b}x{m}x{n}x{data_type.iree_type}>) -> tensor<{b}x{m}x{n}x{data_type.iree_type}>
-        return %result : tensor<{b}x{m}x{n}x{data_type.iree_type}>
-    }}
-    """
-    selected_template = None
-    if operation == OperationType.MATMUL:
-        selected_template = matmul_template
-    if operation == OperationType.BATCH_MATMUL:
-        selected_template = batch_matmul_template
-
-    print(f"Saving generated model to: {template_mlir_model_path}")
-    with open(template_mlir_model_path, mode="w") as f:
-        f.write(selected_template)
-
 
 def dump_profile_programs(input_mlir_model: Path,
                           output_program_path: Path,

@@ -9,41 +9,9 @@ from functools import reduce
 from operator import mul, mod
 
 from typing import List, Optional
+from utils.data_types import Pipeline, OperationType, DataType
 
 
-@enum.unique
-class Pipeline(enum.Enum):
-    GPU_TENSORCORE = "GPU_TENSORCORE"
-    GPU_SIMT = "GPU"
-
-    def __str__(self):
-        return self.name
-
-
-@enum.unique
-class OperationType(enum.Enum):
-    MATMUL = "matmul"
-    BATCH_MATMUL = "bmm"
-    GENERIC = "generic"
-
-
-@enum.unique
-class DataType(enum.Enum):
-    I8 = ("i8", 1)
-    I32 = ("i32", 4)
-    F32 = ("f32", 4)
-    F16 = ("f16", 8)
-
-    def __init__(self, value, bytes_size):
-        self.iree_type = value
-        self.bytes_size = bytes_size
-
-    @staticmethod
-    def from_string(s: str):
-        try:
-            return DataType[s]
-        except KeyError:
-            raise ValueError()
 
 
 def generate_tile_sizes(pipeline: Pipeline, data_type: DataType, input_shape: List[int]) -> List[List[int]]:
