@@ -5,10 +5,8 @@ from typing import Optional, List, Tuple
 import re
 from dataclasses import dataclass
 
-from config_generation import Pipeline, OperationType, DataType, generate_configs, CONTROL_CONFIG
 from profiler import run_profile, TargetBackend
-from model.model_generator import generate_temp_file
-from utils.data_types import OperationType, ProfilerProgram
+from utils.data_types import OperationType, ProfilerProgram, Pipeline, OperationType, DataType
 
 def dir_path(string) -> Optional[Path]:
     """Returns path to dir if it exists"""
@@ -128,8 +126,6 @@ def run_program(
         print("\n\n===========================================")
         print(
             f"Running program: {profiler_program.name}.\n Placing template in model in: {template_mlir_model_path}.\n Outputting csv results to: {output_csv_path}")
-        generate_temp_file(profiler_program.b, profiler_program.m, profiler_program.n, profiler_program.k,
-                           profiler_program.data_type, profiler_program.operation_type, template_mlir_model_path=template_mlir_model_path)
         print("===========================================")
 
         run_profile(
@@ -139,7 +135,6 @@ def run_program(
             profiler_program.k,
             profiler_program.data_type,
             profiler_program.target_backend,
-            template_mlir_model_path,
             output_csv_path,
             benchmark_repetitions,
             benchmark_dispatch_batch_size,

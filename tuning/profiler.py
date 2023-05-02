@@ -1,63 +1,25 @@
-import sys
 import os
 import argparse
 from pathlib import Path
 from typing import Optional, List, Tuple
 from datetime import datetime
 import concurrent.futures
-import json
 from itertools import zip_longest
-from model_annotation import model_annotation
 import time
-from dataclasses import dataclass
 from datetime import timedelta
 
-from iree.compiler import ir, CompilerToolError
-from iree.compiler.transforms import ireec as ireec_trans
+from iree.compiler import  CompilerToolError
+from iree.compiler.transforms import ireec 
 from iree.runtime import benchmark_module
 from iree.runtime.benchmark import BenchmarkResult, BenchmarkToolError
 import iree.runtime as ireert
 import iree.compiler as ireec
 
-from config_generation import Pipeline, OperationType, DataType, generate_configs, CONTROL_CONFIG
-from utils.data_types import TargetBackend, TargetDevice, TargetDriver, CompilerFrontend, CompilationResult
+from model.config_generation import  generate_configs 
+from utils.data_types import TargetBackend, TargetDevice, TargetDriver, CompilerFrontend, CompilationResult, DispatchConfig, Dispatch, DEFAULT_CONFIG, Pipeline, OperationType, DataType
 from utils.iree_utils import  CudaFlavors, iree_compile_arguments
+from model.model_generator import generate_model
 from results.results import ProfilerResult, ProfilerResultsWriter
-
-def create_context() -> ir.Context:
-    context = ir.Context()
-    ireec_trans.register_all_dialects(context)
-    context.allow_unregistered_dialects = True
-    return context
-
-
-def annotate_mlir_model(
-        input_model_str: str,
-        config_json: str,
-        operation_type: OperationType,
-        annotated_model_output_path: Optional[Path] = None) -> ir.Module:
-    """"Annotate model from with config. 
-    Configs are consumed form a Path.
-    Returns annotated IREE Model."""
-
-    search_op = operation_type.value
-    with create_context() as ctx:
-        annotated_model = model_annotation(
-            ctx=None,
-            input_contents=input_model_str,
-            input_configs=[config_json],
-            search_op=search_op,
-        )
-
-        mlir_str = str(annotated_model)
-
-        if annotated_model_output_path:
-            with open(annotated_model_output_path, "w") as f:
-                f.write(mlir_str)
-            print(f"Saved annotated mlir to: {annotated_model_output_path}.")
-
-        return annotated_model
-
 
 def compile_module_to_flatbuffer(
         module,
@@ -95,26 +57,24 @@ def compile_module_to_flatbuffer(
     return flatbuffer_blob, None
 
 
-
-def annotate_and_compile(
+def compile_with_configs(
+        dispatch : Dispatch,
         target_device : TargetDevice,
-        configs: List[dict],
+        configs: List[DispatchConfig],
         operation_type: OperationType,
-        template_model_str: str,
         benchmark_dispatch_batch_size: int,
         extra_compilation_args: List,
         parallel_threads: int = 1) -> List[CompilationResult]:
     """Parallel annotation and compiling for models."""
 
-    def thread_compile(config):
-        # print(f"Annotating and compiling config: {config}")
+    def thread_compile_with_config(dispatch : Dispatch, config: DispatchConfig):
         start_time = time.time()
-        annotated_model = None
-        if config == CONTROL_CONFIG:
-            annotated_model = template_model_str
-        else:
-            annotated_model = annotate_mlir_model(
-                input_model_str=template_model_str, config_json=json.dumps(config), operation_type=operation_type)
+        annotated_model = generate_model(dispatch, None if config == DEFAULT_CONFIG else config)
+
+        print("---")
+        print(annotated_model)
+        print("---")
+
         # Compile model
         flatbuffer_blob, err = compile_module_to_flatbuffer(
             str(annotated_model), target_device, CompilerFrontend.MHLO, benchmark_dispatch_batch_size, extra_compilation_args)
@@ -125,7 +85,7 @@ def annotate_and_compile(
 
     with concurrent.futures.ThreadPoolExecutor(max_workers=parallel_threads) as executor:
         future_to_config = {executor.submit(
-            thread_compile, config): config for config in configs}
+            thread_compile_with_config, dispatch, config): config for config in configs}
         completed_futures, failed_futures = concurrent.futures.wait(
             future_to_config)
 
@@ -183,7 +143,6 @@ def run_profile(
         k: int,
         data_type: DataType,
         target_backend: TargetBackend,
-        template_mlir_model_path: Path,
         output_csv_path: Path,
         benchmark_repetitions: int,
         benchmark_dispatch_batch_size: int,
@@ -198,6 +157,16 @@ def run_profile(
         f"Profiling shape [{b}, {m},{n},{k}] on {target_backend} backend for optimal config.")
     compilation_parallelism = compilation_parallelism
 
+    dispatch = Dispatch(
+        pipeline_name=pipeline,
+        operation=operation_type,
+        data_type=data_type,
+        b=b,
+        m=m,
+        n=n,
+        k=k
+    )
+
     # Output CSV path
     now = datetime.now()
     if not output_csv_path:
@@ -207,25 +176,16 @@ def run_profile(
         output_csv_path)
     benchmark_results_writer.initialize_output_csv()
 
-    # Load template model
-    input_model_path = template_mlir_model_path
-    template_model_str = ""
-    with open(input_model_path, "r") as f:
-        template_model_str = f.read()
-
-    if not template_model_str:
-        raise ValueError("Unable to read template model.")
-
     input_shape = [int(m), int(n), int(k)]
     if b:
         input_shape.insert(0, int(b))
 
-    configs = generate_configs(
+    configs = generate_configs(dispatch=dispatch,
         pipeline=pipeline, operation=operation_type, input_shape=input_shape, data_type=data_type)
     print(f"Generated {len(configs)} configs for model.")
 
     # Control config for first benchmark
-    configs.insert(0, CONTROL_CONFIG)
+    configs.insert(0, DEFAULT_CONFIG) #None represent default config
 
     profiler_results = []
     if not config_end_index:
@@ -247,14 +207,15 @@ def run_profile(
         for index, config in enumerate(config_group):
             config_index = group_index * compilation_parallelism + \
                 index + config_start_index
+            config_text = str(config)
             print(f"Testing config {config_index}/{config_count} : {config}")
 
         # For each config, annotate the model, compile and benchmark
-        compilation_results = annotate_and_compile(
+        compilation_results = compile_with_configs(
+            dispatch,
             target_device,
             config_group,
             operation_type,
-            template_model_str,
             benchmark_dispatch_batch_size,
             extra_compilation_args,
             compilation_parallelism)

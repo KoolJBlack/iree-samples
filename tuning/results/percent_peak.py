@@ -1,16 +1,15 @@
-#!/usr/bin/env python3
-
-"""Script for updating a profiler csv with percentage of peak and reordering the results as such."""
 
 from pathlib import Path
 import argparse
-import csv
 import glob
 from typing import Optional, List, Tuple
 import math
 
-from results import ProfilerResult, PROFILER_RESULT_KEYS, profiler_result_dict_keys, ProfilerResultsReader, ProfilerResultsWriter
+from results import ProfilerResultsReader, ProfilerResultsWriter
 
+###################################################################################################
+# Script for updating a profiler csv with percentage of peak and reordering the results as such.
+###################################################################################################
 
 def parse_arguments():
     parser = argparse.ArgumentParser(

@@ -1,17 +1,16 @@
-#!/usr/bin/env python3
-
 import sys
 from pathlib import Path
 import json
-import enum
 from itertools import product
 from functools import reduce
-from operator import mul, mod
+from operator import mul
 
 from typing import List, Optional
-from utils.data_types import Pipeline, OperationType, DataType
+from utils.data_types import Pipeline, OperationType, DataType, DispatchConfig, Dispatch
 
-
+###################################################################################################
+# This file contains library for producing configs to annotate mlir models.
+###################################################################################################
 
 
 def generate_tile_sizes(pipeline: Pipeline, data_type: DataType, input_shape: List[int]) -> List[List[int]]:
@@ -31,8 +30,7 @@ def generate_tile_sizes(pipeline: Pipeline, data_type: DataType, input_shape: Li
 
     else:
         # Todo: SIMT
-        # Simt
-        simt_sizes = [1, 2, 4, 8]
+        pass
 
     # Batch dim tile is always 1 if it exists
     if len(input_shape) == 4:
@@ -69,7 +67,6 @@ def generate_workgroup_sizes(pipeline: Pipeline, input_shape: List[int], tile_si
         # Tensorcore main dims X, Y, Z
         tensorcore_x_sizes = [32, 64, 128, 256, 512]
         tensorcore_y_sizes = [1, 2]
-        # tensorcore_y_sizes = [1, 2, 4, 8]
         # For tensorcore, workgroup Z is always 1
         tensorcore_z_sizes = [1]
         workgroup_sizes = list(product(
@@ -121,51 +118,6 @@ def generate_pipeline_depth(pipeline: Pipeline, input_shape: List[int], tile_siz
     return [x for x in range(1, 6)]
 
 
-def assemble_config_object(
-    tile_size: List[int],
-    workgroup_size: List[int],
-    pipeline_name: str = "GPU_TENSORCORE",
-    pipeline_depth: Optional[int] = 4,
-    identifier: str = "matmul",
-    b: Optional[int] = None,
-    m: int = 4096,
-    n: int = 3072,
-        k: int = 768) -> dict:
-    """Returns a shark config as a dict object."""
-    config_object = dict()
-    config_options = dict()
-    # Options sub object
-    config_options["work_group_tile_sizes"] = tile_size
-    config_options["work_group_sizes"] = workgroup_size
-    config_options["pipeline"] = pipeline_name
-    if pipeline_name == "GPU_TENSORCORE" and pipeline_depth:
-        config_options["pipeline_depth"] = pipeline_depth
-
-    config_object["options"] = [config_options]
-    config_object["identifier"] = identifier
-    if b:
-        config_object['b'] = b
-    config_object['m'] = m
-    config_object['n'] = n
-    config_object['k'] = k
-
-    return config_object
-
-
-"""A blank control config that does not annotate the model."""
-CONTROL_CONFIG = {
-    "options": [{
-        "work_group_tile_sizes": "(control)",
-        "work_group_sizes": "(control)",
-        "pipeline": "control",
-    }],
-    "identifier": "control",
-    "m": "control",
-    "n": "control",
-    "k": "control",
-}
-
-
 def dump_shark_config_json(config: dict, output_path: Path):
     """Writes out a shark config dict object to a json file.
     Returns number of bytes written."""
@@ -173,7 +125,7 @@ def dump_shark_config_json(config: dict, output_path: Path):
         return f.write(json.dumps(config))
 
 
-def generate_configs(pipeline: Pipeline, operation: OperationType, input_shape: List[int], data_type: DataType) -> List[dict]:
+def generate_configs(dispatch: Dispatch, pipeline: Pipeline, operation: OperationType, input_shape: List[int], data_type: DataType) -> List[DispatchConfig]:
     """Generates a list of configs based on options.
 
     Configs are returned asa list of dictionaries. Each config can be used to annotate model using sharks model_annotation.py
@@ -199,18 +151,18 @@ def generate_configs(pipeline: Pipeline, operation: OperationType, input_shape: 
                     m = input_shape[1]
                     n = input_shape[2]
                     k = input_shape[3]
-                config_dict = assemble_config_object(
+                dispatch_config = DispatchConfig(
+                    pipeline_name=pipeline,
+                    operation=operation,
                     tile_size=tile_size,
                     workgroup_size=workgroup_size,
-                    pipeline_name=pipeline.name,
                     pipeline_depth=pipeline_depth,
-                    identifier=operation.value,
                     b=b,
                     m=m,
                     n=n,
                     k=k
                 )
-                configs.append(config_dict)
+                configs.append(dispatch_config)
     return configs
 
 

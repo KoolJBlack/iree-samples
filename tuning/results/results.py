@@ -1,13 +1,15 @@
-#!/usr/bin/env python3
-
-import os
 import enum
 from typing import Optional, List, Tuple
 from pathlib import Path
 import csv
 
+from utils.data_types import DispatchConfig
 from iree.compiler import CompilerToolError
 from iree.runtime.benchmark import BenchmarkResult, BenchmarkToolError
+
+###################################################################################################
+# Libraries for organizing and saving results from profile runs. 
+###################################################################################################
 
 
 """Enum for profiler result dict keys."""
@@ -46,7 +48,7 @@ class ProfilerResult:
 
     def __init__(self,
                  config_index: int,
-                 config: dict,
+                 config: DispatchConfig,
                  compilation_successful: bool,
                  benchmark_successful: bool,
                  benchmark_results: List[BenchmarkResult] = [],
@@ -65,42 +67,19 @@ class ProfilerResult:
         self.benchmark_time = benchmark_time
         self.build_dict()
 
-    # def __init__(self, profiler_result_dict: dict):
-    #     self.profiler_result_dict = profiler_result_dict
-    #     config_options = {}
-    #     config_options["work_group_tile_sizes"] = profiler_result_dict[PROFILER_RESULT_KEYS.TILE_SIZE]
-    #     config_options["work_group_sizes"]= profiler_result_dict[PROFILER_RESULT_KEYS.WORK_GROUP_SIZES]
-    #     config_options["pipeline"]= profiler_result_dict[PROFILER_RESULT_KEYS.PIPELINE]
-    #     config_options["pipeline_depth"]= profiler_result_dict[PROFILER_RESULT_KEYS.PIPELINE_DEPTH]
-    #     config = {}
-    #     config["options"] = [config_options]
-    #     config["identifier"] = profiler_result_dict[PROFILER_RESULT_KEYS.IDENTIFIER]
-    #     config["b"] = profiler_result_dict[PROFILER_RESULT_KEYS.B]
-    #     config["m"] = profiler_result_dict[PROFILER_RESULT_KEYS.M]
-    #     config["n"] = profiler_result_dict[PROFILER_RESULT_KEYS.N]
-    #     config["k"] = profiler_result_dict[PROFILER_RESULT_KEYS.K]
-
     def build_dict(self):
         config = self.config
-        config_options = config["options"][0]
-        pipeline_depth = 0
-        if "pipeline_depth" in config_options.keys():
-            pipeline_depth = config_options["pipeline_depth"]
-        b = 0
-        if "b" in config.keys():
-            b = config["b"]
-
         self.profiler_result_dict = {
             PROFILER_RESULT_KEYS.CONFIG_INDEX: self.config_index,
-            PROFILER_RESULT_KEYS.TILE_SIZE: str(config_options["work_group_tile_sizes"])[1:-1],
-            PROFILER_RESULT_KEYS.WORK_GROUP_SIZES: str(config_options["work_group_sizes"])[1:-1],
-            PROFILER_RESULT_KEYS.PIPELINE: config_options["pipeline"],
-            PROFILER_RESULT_KEYS.PIPELINE_DEPTH: pipeline_depth,
-            PROFILER_RESULT_KEYS.IDENTIFIER: config["identifier"],
-            PROFILER_RESULT_KEYS.B: b,
-            PROFILER_RESULT_KEYS.M: config["m"],
-            PROFILER_RESULT_KEYS.N: config["n"],
-            PROFILER_RESULT_KEYS.K: config["k"],
+            PROFILER_RESULT_KEYS.TILE_SIZE: str(config.tile_size)[1:-1],
+            PROFILER_RESULT_KEYS.WORK_GROUP_SIZES: str(config.workgroup_size)[1:-1],
+            PROFILER_RESULT_KEYS.PIPELINE: config.pipeline_name,
+            PROFILER_RESULT_KEYS.PIPELINE_DEPTH: config.pipeline_depth,
+            PROFILER_RESULT_KEYS.IDENTIFIER: config.operation,
+            PROFILER_RESULT_KEYS.B: config.b,
+            PROFILER_RESULT_KEYS.M: config.m,
+            PROFILER_RESULT_KEYS.N: config.n,
+            PROFILER_RESULT_KEYS.K: config.k,
             PROFILER_RESULT_KEYS.COMPILATION_TIME_S: self.compilation_time,
             PROFILER_RESULT_KEYS.BENCHMARK_TIME_S: self.benchmark_time,
         }
@@ -143,15 +122,15 @@ class ProfilerResult:
         self.profiler_result_dict[PROFILER_RESULT_KEYS.PERCENTAGE_OF_PEAK] = percentage_of_peak
 
     @staticmethod
-    def create_with_result(config_index: int, config: dict, benchmark_results: List[BenchmarkResult], compilation_time: float, benchmark_time: float):
+    def create_with_result(config_index: int, config: DispatchConfig, benchmark_results: List[BenchmarkResult], compilation_time: float, benchmark_time: float):
         return ProfilerResult(config_index, config, True, True, benchmark_results, compilation_time=compilation_time, benchmark_time=benchmark_time)
 
     @staticmethod
-    def create_failed_compilation(config_index: int, config: dict, compiler_error: CompilerToolError, compilation_time: float):
+    def create_failed_compilation(config_index: int, config: DispatchConfig, compiler_error: CompilerToolError, compilation_time: float):
         return ProfilerResult(config_index, config, False, False, None, compiler_error=compiler_error, compilation_time=compilation_time)
 
     @staticmethod
-    def create_failed_benchmark(config_index: int, config: dict, benchmark_error: BenchmarkToolError, compilation_time: float, benchmark_time: float):
+    def create_failed_benchmark(config_index: int, config: DispatchConfig, benchmark_error: BenchmarkToolError, compilation_time: float, benchmark_time: float):
         return ProfilerResult(config_index, config, True, False, None, benchmark_error=benchmark_error, compilation_time=compilation_time, benchmark_time=benchmark_time)
 
     @staticmethod

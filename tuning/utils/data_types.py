@@ -7,11 +7,12 @@ import json
 # This file contains library of enumerations and classes used to build operation descritpions.
 
 # The file is organized as follows:
-# 1. Enumerated `Type`s 
+# 1. Enumerated `Type`s
 ###################################################################################################
 
 # Base Types
 ###################################################################################################
+
 
 @enum.unique
 class DataType(enum.Enum):
@@ -31,12 +32,14 @@ class DataType(enum.Enum):
         except KeyError:
             raise ValueError()
 
-# IREE Tools Types 
+# IREE Tools Types
 ###################################################################################################
+
 
 @enum.unique
 class CompilerFrontend(str, enum.Enum):
     MHLO = "mhlo"
+
 
 @enum.unique
 class TargetBackend(enum.Enum):
@@ -54,6 +57,7 @@ class TargetBackend(enum.Enum):
         except KeyError:
             raise ValueError()
 
+
 @enum.unique
 class TargetDevice(str, enum.Enum):
     """ Target backend for IREE Run/Benchmark Module/MLIR
@@ -70,6 +74,7 @@ class TargetDriver(str, enum.Enum):
 # IREE Model Compilation
 ###################################################################################################
 
+
 @dataclass
 class CompilationResult:
     config: dict
@@ -80,20 +85,66 @@ class CompilationResult:
 # Profiler Types
 ###################################################################################################
 
-#Note: this is used in the profiler programs. Needs to match. 
+# Note: this is used in the profiler programs. Needs to match.
+
+
 @enum.unique
-class Pipeline(enum.Enum):
-    GPU_TENSORCORE = "GPU_TENSORCORE"
-    GPU_SIMT = "GPU"
+class Pipeline(str, enum.Enum):
+    GPU_TENSORCORE = "LLVMGPUMatmulTensorCore"
+    GPU_SIMT = "LLVMGPUMatmulSimt"
 
     def __str__(self):
         return self.name
 
-#Note: this is used in the profiler programs. Needs to match. 
+# Note: this is used in the profiler programs. Needs to match.
+
+
 @enum.unique
 class OperationType(enum.Enum):
     MATMUL = "matmul"
     BATCH_MATMUL = "bmm"
+
+
+@dataclass
+class Dispatch:
+    pipeline_name: Pipeline
+    operation: OperationType
+    data_type: DataType
+    b: int
+    m: int
+    n: int
+    k: int
+
+
+@dataclass
+class DispatchConfig:
+    pipeline_name: Pipeline
+    operation: OperationType
+    tile_size: List[int]
+    workgroup_size: List[int]
+    pipeline_depth: int
+    b: int
+    m: int
+    n: int
+    k: int
+
+
+class DefaultConfig:
+
+    def __init__(self):
+        self.pipeline_name = "default"
+        self.operation = "default"
+        self.tile_size = "default"
+        self.workgroup_size = "default"
+        self.pipeline_depth = "default"
+        self.b = "default"
+        self.m = "default"
+        self.n = "default"
+        self.k = "default"
+
+"""A blank control config that does not annotate the model."""
+DEFAULT_CONFIG = DefaultConfig()
+
 
 @dataclass
 class ProfilerProgram:
@@ -141,12 +192,6 @@ class ProfilerProgram:
         if json_dict["data_type"] == DataType.F32.iree_type:
             data_type = DataType.F32
 
-        # operation = None
-        # if json_dict["operation"] == Operation.MATMUL.value:
-        #     operation = Operation.MATMUL
-        # if json_dict["operation"] == Operation.BATCH_MATMUL.value:
-        #     operation = Operation.BATCH_MATMUL
-
         operation_type = None
         if json_dict["operation_type"] == OperationType.MATMUL.value:
             operation_type = OperationType.MATMUL
@@ -176,4 +221,3 @@ class ProfilerProgram:
             template_mlir_filename=json_dict["template_mlir_filename"],
             output_csv_filename=json_dict["output_csv_filename"],
         )
-
