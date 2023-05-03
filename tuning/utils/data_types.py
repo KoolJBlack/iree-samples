@@ -27,7 +27,7 @@ class DataType(enum.Enum):
 
     @staticmethod
     def from_string(s: str):
-        try:
+        try: 
             return DataType[s]
         except KeyError:
             raise ValueError()
