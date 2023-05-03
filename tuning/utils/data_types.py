@@ -102,7 +102,7 @@ class Pipeline(str, enum.Enum):
 @enum.unique
 class OperationType(enum.Enum):
     MATMUL = "matmul"
-    BATCH_MATMUL = "bmm"
+    BATCH_MATMUL = "batch_matmul"
 
 
 @dataclass
@@ -110,7 +110,7 @@ class Dispatch:
     pipeline_name: Pipeline
     operation: OperationType
     data_type: DataType
-    b: int
+    b: Optional[int]
     m: int
     n: int
     k: int
@@ -123,10 +123,6 @@ class DispatchConfig:
     tile_size: List[int]
     workgroup_size: List[int]
     pipeline_depth: int
-    b: int
-    m: int
-    n: int
-    k: int
 
 
 class DefaultConfig:
@@ -134,8 +130,8 @@ class DefaultConfig:
     def __init__(self):
         self.pipeline_name = "default"
         self.operation = "default"
-        self.tile_size = "default"
-        self.workgroup_size = "default"
+        self.tile_size = "[default]"
+        self.workgroup_size = "[default]"
         self.pipeline_depth = "default"
         self.b = "default"
         self.m = "default"
@@ -185,19 +181,23 @@ class ProfilerProgram:
         data_type = None
         if json_dict["data_type"] == DataType.I8.iree_type:
             data_type = DataType.I8
-        if json_dict["data_type"] == DataType.F16.iree_type:
+        elif json_dict["data_type"] == DataType.F16.iree_type:
             data_type = DataType.F16
-        if json_dict["data_type"] == DataType.I32.iree_type:
+        elif json_dict["data_type"] == DataType.I32.iree_type:
             data_type = DataType.I32
-        if json_dict["data_type"] == DataType.F32.iree_type:
+        elif json_dict["data_type"] == DataType.F32.iree_type:
             data_type = DataType.F32
-
+        else:
+            raise RuntimeError("Unknown data type")
+        
         operation_type = None
         if json_dict["operation_type"] == OperationType.MATMUL.value:
             operation_type = OperationType.MATMUL
-        if json_dict["operation_type"] == OperationType.BATCH_MATMUL.value:
+        elif json_dict["operation_type"] == OperationType.BATCH_MATMUL.value:
             operation_type = OperationType.BATCH_MATMUL
-
+        else:
+            raise RuntimeError("Unknown operation type")
+        
         target_backend = TargetBackend.CUDA
         if json_dict["target_backend"] != TargetBackend.CUDA.value:
             raise ValueError("Only target backend CUDA supported")
@@ -205,8 +205,10 @@ class ProfilerProgram:
         pipeline = None
         if json_dict["pipeline"] == Pipeline.GPU_TENSORCORE.value:
             pipeline = Pipeline.GPU_TENSORCORE
-        if json_dict["pipeline"] == Pipeline.GPU_SIMT.value:
+        elif json_dict["pipeline"] == Pipeline.GPU_SIMT.value:
             pipeline = Pipeline.GPU_SIMT
+        else:
+            raise RuntimeError("Unknown pipeline")
 
         return ProfilerProgram(
             name=json_dict["name"],

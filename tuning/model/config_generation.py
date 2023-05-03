@@ -6,7 +6,7 @@ from functools import reduce
 from operator import mul
 
 from typing import List, Optional
-from utils.data_types import Pipeline, OperationType, DataType, DispatchConfig, Dispatch
+from utils.data_types import Pipeline, OperationType, DataType, DispatchConfig, Dispatch, TargetBackend
 
 ###################################################################################################
 # This file contains library for producing configs to annotate mlir models.
@@ -28,10 +28,6 @@ def generate_tile_sizes(pipeline: Pipeline, data_type: DataType, input_shape: Li
         tile_sizes = [tile_size for tile_size in tile_sizes if tile_size[2]
                       <= tile_size[0] and tile_size[2] <= tile_size[1]]
 
-    else:
-        # Todo: SIMT
-        pass
-
     # Batch dim tile is always 1 if it exists
     if len(input_shape) == 4:
         tile_sizes = [[1] + list(tile_size) for tile_size in tile_sizes]
@@ -46,12 +42,12 @@ def generate_tile_sizes(pipeline: Pipeline, data_type: DataType, input_shape: Li
         input_shape, tile_size)]
 
     # Ensure shared memory usage <=64KB
+    shared_mem_bytes = 163 * 1024
     def fits_shared_mem(tile_size):
         if len(tile_size) == 4:
             tile_size = tile_size[1:]
         total_shared_mem_size = (
             tile_size[0] * tile_size[2] + tile_size[1] * tile_size[2]) * data_type.bytes_size
-        shared_mem_bytes = 64 * 1024
         return total_shared_mem_size < shared_mem_bytes
     tile_sizes = [
         tile_size for tile_size in tile_sizes if fits_shared_mem(tile_size)]
@@ -95,9 +91,7 @@ def generate_workgroup_sizes(pipeline: Pipeline, input_shape: List[int], tile_si
             return second_level_tile[0] % iree_tensorcore_size[0] == 0 and second_level_tile[1] % iree_tensorcore_size[1] == 0 and second_level_tile[2] % iree_tensorcore_size[2] == 0
         workgroup_sizes = [
             workgroup_size for workgroup_size in workgroup_sizes if divides_tensorcore(tile_size, workgroup_size)]
-    else:
-        # Todo: SIMT
-        pass
+
 
     return workgroup_sizes
 
@@ -117,20 +111,18 @@ def generate_pipeline_depth(pipeline: Pipeline, input_shape: List[int], tile_siz
     # For tensorcore, usually between 1 and 12, increments of 1
     return [x for x in range(1, 6)]
 
-
-def dump_shark_config_json(config: dict, output_path: Path):
-    """Writes out a shark config dict object to a json file.
-    Returns number of bytes written."""
-    with open(output_path, "w") as f:
-        return f.write(json.dumps(config))
-
-
-def generate_configs(dispatch: Dispatch, pipeline: Pipeline, operation: OperationType, input_shape: List[int], data_type: DataType) -> List[DispatchConfig]:
-    """Generates a list of configs based on options.
-
-    Configs are returned asa list of dictionaries. Each config can be used to annotate model using sharks model_annotation.py
+def generate_cuda_configs(dispatch: Dispatch)  -> List[DispatchConfig]:
+    """Generates configs for CUDA.
     """
+    if dispatch.pipeline_name != Pipeline.GPU_TENSORCORE:
+        raise RuntimeError("Only GPU Tensorcore supported for configs.")
     configs = []
+    pipeline = dispatch.pipeline_name
+    operation = dispatch.operation
+    data_type = dispatch.data_type
+    input_shape = [dispatch.m, dispatch.n, dispatch.k]
+    if dispatch.b:
+        input_shape.insert(0, dispatch.b)
     tile_sizes = generate_tile_sizes(pipeline, data_type, input_shape)
 
     for tile_size in tile_sizes:
@@ -142,28 +134,24 @@ def generate_configs(dispatch: Dispatch, pipeline: Pipeline, operation: Operatio
         # Create a config for each combination of tile, workgroup and pipeline
         for workgroup_size in workgroup_sizes:
             for pipeline_depth in pipeline_depths:
-                b = None
-                m = input_shape[0]
-                n = input_shape[1]
-                k = input_shape[2]
-                if len(input_shape) == 4:
-                    b = input_shape[0]
-                    m = input_shape[1]
-                    n = input_shape[2]
-                    k = input_shape[3]
                 dispatch_config = DispatchConfig(
                     pipeline_name=pipeline,
                     operation=operation,
                     tile_size=tile_size,
                     workgroup_size=workgroup_size,
                     pipeline_depth=pipeline_depth,
-                    b=b,
-                    m=m,
-                    n=n,
-                    k=k
                 )
                 configs.append(dispatch_config)
     return configs
+
+def generate_configs(target_backend: TargetBackend, dispatch: Dispatch) -> List[DispatchConfig]:
+    """Generates configs compatible with the target backend and dispatch.
+    """
+    if target_backend == TargetBackend.CUDA:
+        return generate_cuda_configs(dispatch)
+    else:
+        raise RuntimeError("Only configs for CUDA supported.")
+
 
 
 def main():

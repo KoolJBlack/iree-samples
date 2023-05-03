@@ -8,29 +8,30 @@ from itertools import zip_longest
 import time
 from datetime import timedelta
 
-from iree.compiler import  CompilerToolError
-from iree.compiler.transforms import ireec 
+from iree.compiler import CompilerToolError
+from iree.compiler.tools import core as ireec
 from iree.runtime import benchmark_module
 from iree.runtime.benchmark import BenchmarkResult, BenchmarkToolError
 import iree.runtime as ireert
-import iree.compiler as ireec
 
-from model.config_generation import  generate_configs 
+from model.config_generation import generate_configs
 from utils.data_types import TargetBackend, TargetDevice, TargetDriver, CompilerFrontend, CompilationResult, DispatchConfig, Dispatch, DEFAULT_CONFIG, Pipeline, OperationType, DataType
-from utils.iree_utils import  CudaFlavors, iree_compile_arguments
+from utils.iree_utils import CudaFlavors, iree_compile_arguments
 from model.model_generator import generate_model
 from results.results import ProfilerResult, ProfilerResultsWriter
+
 
 def compile_module_to_flatbuffer(
         module,
         target_device: TargetDevice,
-        frontend: CompilerFrontend = CompilerFrontend.MHLO ,
+        frontend: CompilerFrontend = CompilerFrontend.MHLO,
         benchmark_dispatch_batch_size: Optional[int] = None,
         extra_args: Optional[List] = []) -> tuple[Optional[bytes], Optional[CompilerToolError]]:
     """Compiles mlir module and returns the flatbuffer blob"""
     args = []
     if target_device == TargetDevice.CUDA:
-        args.extend(iree_compile_arguments(TargetBackend.CUDA, [CudaFlavors.SHARK_DEFAULT, CudaFlavors.CUDA_SM_80]))
+        args.extend(iree_compile_arguments(TargetBackend.CUDA, [
+                    CudaFlavors.SHARK_DEFAULT, CudaFlavors.CUDA_SM_80]))
     else:
         raise ValueError(
             "Only `cuda` target device is supported for benchmarking")
@@ -58,8 +59,8 @@ def compile_module_to_flatbuffer(
 
 
 def compile_with_configs(
-        dispatch : Dispatch,
-        target_device : TargetDevice,
+        dispatch: Dispatch,
+        target_device: TargetDevice,
         configs: List[DispatchConfig],
         operation_type: OperationType,
         benchmark_dispatch_batch_size: int,
@@ -67,13 +68,10 @@ def compile_with_configs(
         parallel_threads: int = 1) -> List[CompilationResult]:
     """Parallel annotation and compiling for models."""
 
-    def thread_compile_with_config(dispatch : Dispatch, config: DispatchConfig):
+    def thread_compile_with_config(dispatch: Dispatch, config: DispatchConfig):
         start_time = time.time()
-        annotated_model = generate_model(dispatch, None if config == DEFAULT_CONFIG else config)
-
-        print("---")
-        print(annotated_model)
-        print("---")
+        annotated_model = generate_model(
+            dispatch, None if config == DEFAULT_CONFIG else config)
 
         # Compile model
         flatbuffer_blob, err = compile_module_to_flatbuffer(
@@ -154,7 +152,7 @@ def run_profile(
         config_end_index: Optional[int] = None):
     """Run the profiler."""
     print(
-        f"Profiling shape [{b}, {m},{n},{k}] on {target_backend} backend for optimal config.")
+        f"Profiling shape [{b},{m},{n},{k}] on {target_backend} backend for optimal config.")
     compilation_parallelism = compilation_parallelism
 
     dispatch = Dispatch(
@@ -173,19 +171,23 @@ def run_profile(
         raise ValueError("Output CSV path required.")
 
     benchmark_results_writer = ProfilerResultsWriter(
-        output_csv_path)
+        output_csv_path, dispatch)
     benchmark_results_writer.initialize_output_csv()
 
     input_shape = [int(m), int(n), int(k)]
     if b:
         input_shape.insert(0, int(b))
 
-    configs = generate_configs(dispatch=dispatch,
-        pipeline=pipeline, operation=operation_type, input_shape=input_shape, data_type=data_type)
+    target_device = None
+    if target_backend == TargetBackend.CUDA:
+        target_device = TargetDevice.CUDA
+
+    configs = generate_configs(target_backend = target_backend, dispatch=dispatch)
+
     print(f"Generated {len(configs)} configs for model.")
 
     # Control config for first benchmark
-    configs.insert(0, DEFAULT_CONFIG) #None represent default config
+    configs.insert(0, DEFAULT_CONFIG)  # None represent default config
 
     profiler_results = []
     if not config_end_index:
@@ -199,9 +201,7 @@ def run_profile(
 
     tuning_start_time_s = time.time()
 
-    target_device = None
-    if target_backend == TargetBackend.CUDA:
-        target_device = TargetDevice.CUDA
+
 
     for group_index, config_group in enumerate(grouped_configs):
         for index, config in enumerate(config_group):
