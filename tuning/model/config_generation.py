@@ -32,26 +32,6 @@ def generate_tile_sizes(pipeline: Pipeline, data_type: DataType, input_shape: Li
     if len(input_shape) == 4:
         tile_sizes = [[1] + list(tile_size) for tile_size in tile_sizes]
 
-    # Toss any config that does not divide the input shape
-    def divides_shape(input_shape, tile_size):
-        for tile, shape in zip(tile_size, input_shape):
-            if shape % tile != 0:
-                return False
-        return True
-    tile_sizes = [tile_size for tile_size in tile_sizes if divides_shape(
-        input_shape, tile_size)]
-
-    # Ensure shared memory usage <=64KB
-    shared_mem_bytes = 163 * 1024
-    def fits_shared_mem(tile_size):
-        if len(tile_size) == 4:
-            tile_size = tile_size[1:]
-        total_shared_mem_size = (
-            tile_size[0] * tile_size[2] + tile_size[1] * tile_size[2]) * data_type.bytes_size
-        return total_shared_mem_size < shared_mem_bytes
-    tile_sizes = [
-        tile_size for tile_size in tile_sizes if fits_shared_mem(tile_size)]
-
     return tile_sizes
 
 
@@ -74,25 +54,6 @@ def generate_workgroup_sizes(pipeline: Pipeline, input_shape: List[int], tile_si
             tensorcore_x_sizes, tensorcore_y_sizes, tensorcore_z_sizes))
         workgroup_sizes.extend(workgroup_sizes2)
 
-        # Total workgroup size < 1024
-        workgroup_sizes = [workgroup_size for workgroup_size in workgroup_sizes if not reduce(
-            mul, workgroup_size) > 1024]
-
-        # Only use if second level tiling size divides by tensorcore
-        iree_tensorcore_size = [16, 16, 8]
-        warp_size = 32
-
-        def divides_tensorcore(tile_size, workgroup_size):
-            if len(tile_size) == 4:
-                tile_size = tile_size[1:]
-            second_level_tile = [tile_size[0] / workgroup_size[1],
-                                 tile_size[1] / (workgroup_size[0] / warp_size), tile_size[2]]
-            # print(second_level_tile, workgroup_size)
-            return second_level_tile[0] % iree_tensorcore_size[0] == 0 and second_level_tile[1] % iree_tensorcore_size[1] == 0 and second_level_tile[2] % iree_tensorcore_size[2] == 0
-        workgroup_sizes = [
-            workgroup_size for workgroup_size in workgroup_sizes if divides_tensorcore(tile_size, workgroup_size)]
-
-
     return workgroup_sizes
 
 
@@ -110,6 +71,53 @@ def generate_pipeline_depth(pipeline: Pipeline, input_shape: List[int], tile_siz
             return [1]
     # For tensorcore, usually between 1 and 12, increments of 1
     return [x for x in range(1, 6)]
+
+def cuda_tensorcore_verify(dispatch: Dispatch, config: DispatchConfig) -> bool:
+    """"Verifies the CUDA config on Tensorcor. Returns true if pass."""
+    input_shape = [dispatch.m, dispatch.n, dispatch.k]
+    if dispatch.b:
+        input_shape.insert(0, dispatch.b)
+
+    # Toss any config that does not divide the input shape
+    def divides_shape(tile_size: List[int]):
+        for tile, shape in zip(tile_size, input_shape):
+            if shape % tile != 0:
+                return False
+        return True
+    if not divides_shape(config.tile_size):
+        return False
+
+    # Ensure shared memory usage <=164KB
+    shared_mem_bytes = 163 * 1024
+    def fits_shared_mem(tile_size: List[int]):
+        if len(tile_size) == 4:
+            tile_size = tile_size[1:]
+        total_shared_mem_size = (
+            tile_size[0] * tile_size[2] + tile_size[1] * tile_size[2]) * dispatch.data_type.bytes_size
+        return total_shared_mem_size < shared_mem_bytes
+    if not fits_shared_mem(config.tile_size):
+        return False
+    
+    # Total workgroup size < 1024
+    if reduce(mul, config.workgroup_size) > 1024:
+        return False
+
+    # Only use if second level tiling size divides by tensorcore
+    iree_tensorcore_size = [16, 16, 8]
+    warp_size = 32
+
+    def divides_tensorcore(tile_size, workgroup_size):
+        if len(tile_size) == 4:
+            tile_size = tile_size[1:]
+        second_level_tile = [tile_size[0] / workgroup_size[1],
+                                tile_size[1] / (workgroup_size[0] / warp_size), tile_size[2]]
+        # print(second_level_tile, workgroup_size)
+        return second_level_tile[0] % iree_tensorcore_size[0] == 0 and second_level_tile[1] % iree_tensorcore_size[1] == 0 and second_level_tile[2] % iree_tensorcore_size[2] == 0
+    if not divides_tensorcore(config.tile_size, config.workgroup_size):
+        return False
+
+    return True
+
 
 def generate_cuda_configs(dispatch: Dispatch)  -> List[DispatchConfig]:
     """Generates configs for CUDA.
@@ -141,7 +149,9 @@ def generate_cuda_configs(dispatch: Dispatch)  -> List[DispatchConfig]:
                     workgroup_size=workgroup_size,
                     pipeline_depth=pipeline_depth,
                 )
-                configs.append(dispatch_config)
+                if cuda_tensorcore_verify(dispatch, dispatch_config):
+                    configs.append(dispatch_config)
+
     return configs
 
 def generate_configs(target_backend: TargetBackend, dispatch: Dispatch) -> List[DispatchConfig]:
