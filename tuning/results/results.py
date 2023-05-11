@@ -14,7 +14,6 @@ from iree.runtime.benchmark import BenchmarkResult, BenchmarkToolError
 
 """Enum for profiler result dict keys."""
 
-
 class PROFILER_RESULT_KEYS(str, enum.Enum):
     CONFIG_INDEX = "config_index"
     BENCHMARK_NAME = "benchmark_name"
@@ -45,6 +44,7 @@ class PROFILER_RESULT_KEYS(str, enum.Enum):
 
 def profiler_result_dict_keys() -> dict:
     return [e.value for e in PROFILER_RESULT_KEYS]
+
 
 class ProfilerResult:
     """Stores the results of each profiler run and its config."""
@@ -89,7 +89,7 @@ class ProfilerResult:
         return ProfilerResult(profiler_result_dict)
 
 
-def build_profiler_result_dict(profiler_result: ProfilerResult, dispatch : Dispatch) -> dict:
+def build_profiler_result_dict(profiler_result: ProfilerResult, dispatch: Dispatch) -> dict:
     def strip_ms(raw_time: str):
         return raw_time.split(" ")[0]
 
@@ -138,9 +138,9 @@ def build_profiler_result_dict(profiler_result: ProfilerResult, dispatch : Dispa
             })
         else:
             benchmark_result_mean = benchmark_results[-4]
-            benchmark_result_median = benchmark_results[-3]
+            # benchmark_result_median = benchmark_results[-3]
             benchmark_result_std = benchmark_results[-2]
-            benchmark_result_cv = benchmark_results[-1]
+            # benchmark_result_cv = benchmark_results[-1]
             benchmark_results_remaining = benchmark_results[:-4]
             benchmark_name = benchmark_results_remaining[0].benchmark_name
             iterations = benchmark_results_remaining[0].iterations
@@ -162,6 +162,7 @@ def build_profiler_result_dict(profiler_result: ProfilerResult, dispatch : Dispa
     profiler_result_dict.update({PROFILER_RESULT_KEYS.ERROR: err})
     return profiler_result_dict
 
+
 class ProfilerResultsWriter:
     """Class for writing benchmark results to CSV."""
 
@@ -181,7 +182,8 @@ class ProfilerResultsWriter:
         """Save a profile result to csv."""
         with open(self.output_csv_path, mode="a", newline="") as csv_f:
             writer = csv.DictWriter(csv_f, fieldnames=self.field_names)
-            profiler_result_dict = build_profiler_result_dict(profiler_result, self.dispatch)
+            profiler_result_dict = build_profiler_result_dict(
+                profiler_result, self.dispatch)
             writer.writerow(profiler_result_dict)
 
     def write_empty_line(self):
@@ -258,4 +260,3 @@ class ProfilerResultsReader:
             return [b, m, n, k]
         else:
             return [m, n, k]
-

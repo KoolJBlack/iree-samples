@@ -19,7 +19,7 @@ class DataType(enum.Enum):
     I8 = ("i8", 1)
     I32 = ("i32", 4)
     F32 = ("f32", 4)
-    F16 = ("f16", 8)
+    F16 = ("f16", 2)
 
     def __init__(self, value, bytes_size):
         self.iree_type = value

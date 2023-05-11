@@ -1,6 +1,3 @@
-import sys
-from pathlib import Path
-import json
 from itertools import product
 from functools import reduce
 from operator import mul
@@ -12,6 +9,9 @@ from utils.data_types import Pipeline, OperationType, DataType, DispatchConfig, 
 # This file contains library for producing configs to annotate mlir models.
 ###################################################################################################
 
+
+# CUDA Tensorcore Configs
+###################################################################################################
 
 def generate_tile_sizes(pipeline: Pipeline, data_type: DataType, input_shape: List[int]) -> List[List[int]]:
     """"Returns list of possible tile sizes for input shape and pipeline"""
@@ -62,64 +62,104 @@ def generate_pipeline_depth(pipeline: Pipeline, input_shape: List[int], tile_siz
     if pipeline != Pipeline.GPU_TENSORCORE:
         return []
 
-    # Can only software pipeline if tile size is smaller than K
-    if len(input_shape) == 4:
-        if tile_size[3] == input_shape[2]:
-            return [1]
-    if len(input_shape) == 3:
-        if tile_size[2] == input_shape[1]:
-            return [1]
     # For tensorcore, usually between 1 and 12, increments of 1
     return [x for x in range(1, 6)]
 
+
 def cuda_tensorcore_verify(dispatch: Dispatch, config: DispatchConfig) -> bool:
     """"Verifies the CUDA config on Tensorcor. Returns true if pass."""
+    # Fixed constants
+    dim_x = 0
+    dim_y = 1
+    dim_z = 2
+    dim_m = 0
+    dim_n = 1
+    dim_k = 2
+    warp_size = 32
+
+    iree_tensorcore_shape = None
+    if dispatch.data_type == DataType.F16:
+        iree_tensorcore_shape = [16, 16, 16]
+    elif dispatch.data_type == DataType.F32:
+        iree_tensorcore_shape = [16, 16, 8]
+    else:
+        raise RuntimeError("Unsupported tensorcore shape")
+
     input_shape = [dispatch.m, dispatch.n, dispatch.k]
+    thread_block_shape = [config.tile_size[0],
+                          config.tile_size[1],
+                          config.tile_size[2]]
     if dispatch.b:
         input_shape.insert(0, dispatch.b)
+        # Remove the batch dimension from the thread_block_shape
+        thread_block_shape = [config.tile_size[1],
+                              config.tile_size[2],
+                              config.tile_size[3]]
 
-    # Toss any config that does not divide the input shape
-    def divides_shape(tile_size: List[int]):
-        for tile, shape in zip(tile_size, input_shape):
-            if shape % tile != 0:
-                return False
-        return True
-    if not divides_shape(config.tile_size):
-        return False
-
-    # Ensure shared memory usage <=164KB
-    shared_mem_bytes = 163 * 1024
-    def fits_shared_mem(tile_size: List[int]):
-        if len(tile_size) == 4:
-            tile_size = tile_size[1:]
-        total_shared_mem_size = (
-            tile_size[0] * tile_size[2] + tile_size[1] * tile_size[2]) * dispatch.data_type.bytes_size
-        return total_shared_mem_size < shared_mem_bytes
-    if not fits_shared_mem(config.tile_size):
-        return False
-    
-    # Total workgroup size < 1024
+    # Total workgroup size > 1024?
     if reduce(mul, config.workgroup_size) > 1024:
         return False
 
-    # Only use if second level tiling size divides by tensorcore
-    iree_tensorcore_size = [16, 16, 8]
-    warp_size = 32
-
-    def divides_tensorcore(tile_size, workgroup_size):
-        if len(tile_size) == 4:
-            tile_size = tile_size[1:]
-        second_level_tile = [tile_size[0] / workgroup_size[1],
-                                tile_size[1] / (workgroup_size[0] / warp_size), tile_size[2]]
-        # print(second_level_tile, workgroup_size)
-        return second_level_tile[0] % iree_tensorcore_size[0] == 0 and second_level_tile[1] % iree_tensorcore_size[1] == 0 and second_level_tile[2] % iree_tensorcore_size[2] == 0
-    if not divides_tensorcore(config.tile_size, config.workgroup_size):
+    # Number of threads in z-dim is 1
+    if config.workgroup_size[dim_z] != 1:
         return False
+
+    # x-dim multiple of warp size (32)
+    if config.workgroup_size[dim_x] % warp_size != 0:
+        return False
+
+    #  Number of warps in x, y, and z dim.
+    num_warps = [config.workgroup_size[dim_x] / warp_size,
+                 config.workgroup_size[dim_y],
+                 config.workgroup_size[dim_z]]
+
+    # Matrix-multiply problem shape in number of elements in M, N, and K dim.
+    matmul_shape = [dispatch.m,
+                    dispatch.n,
+                    dispatch.k]
+
+    # Warp tile shape in number of elements in M, N, and K dim.
+    # Note that num warp in (x, y, z) dim are mapped to problem (M, N, K) dim as:
+    # DimY -> ProblemDimM, DimX -> ProblemDimN, DimZ -> ProblemDimK.
+    warp_shape = [thread_block_shape[dim_m] / num_warps[dim_y],
+                  thread_block_shape[dim_n] / num_warps[dim_x],
+                  thread_block_shape[dim_k] / num_warps[dim_z]]
+
+    # Verify that matmul problem shape can be tiled with the thread block shape.
+    if matmul_shape[dim_m] % thread_block_shape[dim_m] != 0 or matmul_shape[dim_n] % thread_block_shape[dim_n] != 0 or matmul_shape[dim_k] % thread_block_shape[dim_k] != 0:
+        return False
+
+    # Verify that if warp shape can be tiled using warp-level Tensor core
+    # instruction shape.
+    if warp_shape[dim_m] % iree_tensorcore_shape[dim_m] != 0 or warp_shape[dim_n] % iree_tensorcore_shape[dim_n] != 0 or warp_shape[dim_k] % iree_tensorcore_shape[dim_k] != 0:
+        return False
+
+    # Ensure shared memory usage <=163KB (limit for A100)
+    shared_mem_bytes = 163 * 1024
+    # Shared memory usage is determined by the two input operands to the matmul times the pipelined length
+    lhs_mem_bytes = thread_block_shape[dim_m] * \
+        thread_block_shape[dim_k] * dispatch.data_type.bytes_size
+    rhs_mem_bytes = thread_block_shape[dim_n] * \
+        thread_block_shape[dim_k] * dispatch.data_type.bytes_size
+    matmul_mem_bytes = (lhs_mem_bytes + rhs_mem_bytes) * config.pipeline_depth
+    if matmul_mem_bytes > shared_mem_bytes:
+        return False
+
+    # # Can only software pipeline if tile size is smaller than K
+    # if len(input_shape) == 4:
+    #     if tile_size[3] == input_shape[2]:
+    #         return [1]
+    # if len(input_shape) == 3:
+    #     if tile_size[2] == input_shape[1]:
+    #         return [1]
 
     return True
 
+# General Configs
+###################################################################################################
 
-def generate_cuda_configs(dispatch: Dispatch)  -> List[DispatchConfig]:
+
+def generate_cuda_configs(dispatch: Dispatch) -> List[DispatchConfig]:
     """Generates configs for CUDA.
     """
     if dispatch.pipeline_name != Pipeline.GPU_TENSORCORE:
@@ -154,6 +194,7 @@ def generate_cuda_configs(dispatch: Dispatch)  -> List[DispatchConfig]:
 
     return configs
 
+
 def generate_configs(target_backend: TargetBackend, dispatch: Dispatch) -> List[DispatchConfig]:
     """Generates configs compatible with the target backend and dispatch.
     """
@@ -161,15 +202,3 @@ def generate_configs(target_backend: TargetBackend, dispatch: Dispatch) -> List[
         return generate_cuda_configs(dispatch)
     else:
         raise RuntimeError("Only configs for CUDA supported.")
-
-
-
-def main():
-    print("config_generation.py")
-    configs = generate_configs(pipeline=Pipeline.GPU_TENSORCORE, operation=OperationType.MATMUL, input_shape=[
-                               4096, 3072, 768], data_type=DataType.F32)
-    print(f"Generated config count: {len(configs)}")
-
-
-if __name__ == '__main__':
-    sys.exit(main())  # next section explains the use of sys.exit
