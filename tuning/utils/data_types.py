@@ -139,6 +139,9 @@ class DefaultConfig:
         self.m = "default"
         self.n = "default"
         self.k = "default"
+    
+    def __repr__(self) -> str:
+        return "DEFAULT_CONFIG"
 
 """A blank control config that does not annotate the model."""
 DEFAULT_CONFIG = DefaultConfig()

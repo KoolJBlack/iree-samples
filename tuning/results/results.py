@@ -3,7 +3,7 @@ from typing import Optional, List, Tuple
 from pathlib import Path
 import csv
 
-from utils.data_types import DispatchConfig, Dispatch
+from utils.data_types import DispatchConfig, Dispatch, OperationType
 from iree.compiler import CompilerToolError
 from iree.runtime.benchmark import BenchmarkResult, BenchmarkToolError
 
@@ -13,6 +13,7 @@ from iree.runtime.benchmark import BenchmarkResult, BenchmarkToolError
 
 
 """Enum for profiler result dict keys."""
+
 
 class PROFILER_RESULT_KEYS(str, enum.Enum):
     CONFIG_INDEX = "config_index"
@@ -28,7 +29,7 @@ class PROFILER_RESULT_KEYS(str, enum.Enum):
     K = "k"
     BENCHMARK_REPETITIONS = "benchmark_repetitions"
     ITERATIONS = "iterations"
-    PERCENTAGE_OF_PEAK = "percent_of_peak"
+    # PERCENTAGE_OF_PEAK = "percent_of_peak"
     TIME_MEAN_MS = "time_mean_milliseconds"
     CPU_TIME_MEAN_MS = "cpu_time_mean_milliseconds"
     # TIME_MEDIAN_MS = "time_median_milliseconds"
@@ -37,6 +38,7 @@ class PROFILER_RESULT_KEYS(str, enum.Enum):
     CPU_TIME_STD_MS = "cpu_time_std_milliseconds"
     # TIME_CV_MS = "time_cv_milliseconds"
     # CPU_TIME_CV_MS = "cpu_time_cv_milliseconds"
+    GFLOPS = "gflops"
     COMPILATION_TIME_S = "compilation_time_seconds"
     BENCHMARK_TIME_S = "benchmark_time_seconds"
     ERROR = "error"
@@ -69,8 +71,8 @@ class ProfilerResult:
         self.compilation_time = compilation_time
         self.benchmark_time = benchmark_time
 
-    def set_percentage_of_peak(self, percentage_of_peak: float):
-        self.profiler_result_dict[PROFILER_RESULT_KEYS.PERCENTAGE_OF_PEAK] = percentage_of_peak
+    # def set_percentage_of_peak(self, percentage_of_peak: float):
+    #     self.profiler_result_dict[PROFILER_RESULT_KEYS.PERCENTAGE_OF_PEAK] = percentage_of_peak
 
     @staticmethod
     def create_with_result(config_index: int, config: DispatchConfig, benchmark_results: List[BenchmarkResult], compilation_time: float, benchmark_time: float):
@@ -87,6 +89,19 @@ class ProfilerResult:
     @staticmethod
     def create_from_dict(profiler_result_dict: dict):
         return ProfilerResult(profiler_result_dict)
+
+
+def calculate_gflops(dispatch: Dispatch, runtime_ms: float):
+    """Returns the gflops"""
+    if dispatch.operation == OperationType.MATMUL:
+        matmul_floating_operations = 2 * dispatch.m * dispatch.n * dispatch.k
+    elif dispatch.operation == OperationType.BATCH_MATMUL:
+        matmul_floating_operations = 2 * dispatch.b * \
+            dispatch.m * dispatch.n * dispatch.k
+    else:
+        raise RuntimeError("unable to calculate gflops for non matmul")
+    gflops = float(matmul_floating_operations) / runtime_ms / 1.0e6
+    return gflops
 
 
 def build_profiler_result_dict(profiler_result: ProfilerResult, dispatch: Dispatch) -> dict:
@@ -160,6 +175,12 @@ def build_profiler_result_dict(profiler_result: ProfilerResult, dispatch: Dispat
             })
 
     profiler_result_dict.update({PROFILER_RESULT_KEYS.ERROR: err})
+    
+    runtime_ms = None
+    if not err:
+        runtime_ms = float(profiler_result_dict[PROFILER_RESULT_KEYS.TIME_MEAN_MS])
+        profiler_result_dict.update({
+            PROFILER_RESULT_KEYS.GFLOPS: float(round(calculate_gflops(dispatch, runtime_ms=runtime_ms), 2))})
     return profiler_result_dict
 
 
