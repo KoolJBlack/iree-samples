@@ -100,10 +100,12 @@ class Pipeline(str, enum.Enum):
 
 
 @enum.unique
-class OperationType(enum.Enum):
+class OperationType(str, enum.Enum):
     MATMUL = "matmul"
     BATCH_MATMUL = "batch_matmul"
-
+    
+    def __str__(self):
+        return self.name
 
 @dataclass
 class Dispatch:

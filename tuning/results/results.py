@@ -16,11 +16,11 @@ from iree.runtime.benchmark import BenchmarkResult, BenchmarkToolError
 
 class PROFILER_RESULT_KEYS(str, enum.Enum):
     CONFIG_INDEX = "config_index"
-    BENCHMARK_NAME = "benchmark_name"
+    # BENCHMARK_NAME = "benchmark_name"
     TILE_SIZE = "tile_sizes"
     WORK_GROUP_SIZES = "work_group_sizes"
-    PIPELINE = "pipeline"
     PIPELINE_DEPTH = "pipeline_depth"
+    PIPELINE = "pipeline"
     IDENTIFIER = "identifier"
     B = "b"
     M = "m"
@@ -120,11 +120,11 @@ def build_profiler_result_dict(profiler_result: ProfilerResult, dispatch: Dispat
         if len(benchmark_results) == 1:
             # There is only one result
             benchmark_result_mean = benchmark_results[0]
-            benchmark_name = benchmark_results[0].benchmark_name
+            # benchmark_name = benchmark_results[0].benchmark_name
             iterations = benchmark_results[0].iterations
 
             profiler_result_dict.update({
-                PROFILER_RESULT_KEYS.BENCHMARK_NAME: benchmark_name,
+                # PROFILER_RESULT_KEYS.BENCHMARK_NAME: benchmark_name,
                 PROFILER_RESULT_KEYS.BENCHMARK_REPETITIONS: 1,
                 PROFILER_RESULT_KEYS.ITERATIONS: iterations,
                 PROFILER_RESULT_KEYS.TIME_MEAN_MS: strip_ms(benchmark_result_mean.time),
@@ -146,7 +146,7 @@ def build_profiler_result_dict(profiler_result: ProfilerResult, dispatch: Dispat
             iterations = benchmark_results_remaining[0].iterations
 
             profiler_result_dict.update({
-                PROFILER_RESULT_KEYS.BENCHMARK_NAME: benchmark_name,
+                # PROFILER_RESULT_KEYS.BENCHMARK_NAME: benchmark_name,
                 PROFILER_RESULT_KEYS.BENCHMARK_REPETITIONS: len(benchmark_results_remaining),
                 PROFILER_RESULT_KEYS.ITERATIONS: iterations,
                 PROFILER_RESULT_KEYS.TIME_MEAN_MS: strip_ms(benchmark_result_mean.time),
