@@ -171,7 +171,7 @@ def run_profile(
         raise ValueError("Output CSV path required.")
 
     benchmark_results_writer = ProfilerResultsWriter(
-        output_csv_path, dispatch)
+        output_csv_path)
     benchmark_results_writer.initialize_output_csv()
 
     input_shape = [int(m), int(n), int(k)]
@@ -182,7 +182,8 @@ def run_profile(
     if target_backend == TargetBackend.CUDA:
         target_device = TargetDevice.CUDA
 
-    configs = generate_configs(target_backend = target_backend, dispatch=dispatch)
+    configs = generate_configs(
+        target_backend=target_backend, dispatch=dispatch)
 
     print(f"Generated {len(configs)} configs for dispatch.")
 
@@ -200,8 +201,6 @@ def run_profile(
     grouped_configs = zip_longest(fillvalue=None, *iter_configs)
 
     tuning_start_time_s = time.time()
-
-
 
     for group_index, config_group in enumerate(grouped_configs):
         for index, config in enumerate(config_group):
@@ -226,9 +225,16 @@ def run_profile(
             if not compilation_result.flatbuffer_blob:
                 print(f"Failed to compile {config_index}/{config_count}")
                 tuning_elapsed_time_s = time.time() - tuning_start_time_s
-                print(f"Profiled config {config_index}/{config_count} - total elapsed time: {timedelta(seconds=tuning_elapsed_time_s)}, compilation time: {compilation_result.compilation_time_s:0.4f}sec")
+                print(
+                    f"Profiled config {config_index}/{config_count} - total elapsed time: {timedelta(seconds=tuning_elapsed_time_s)}, compilation time: {compilation_result.compilation_time_s:0.4f}sec")
                 profiler_results.append(
-                    ProfilerResult.create_failed_compilation(config_index, compilation_result.config, compilation_result.err, compilation_result.compilation_time_s))
+                    ProfilerResult.create_with_err(
+                        config_index,
+                        compilation_result.config,
+                        dispatch,
+                        compilation_result.compilation_time_s,
+                        None,
+                        err))
                 benchmark_results_writer.write_csv_result(profiler_results[-1])
                 continue
 
@@ -247,13 +253,25 @@ def run_profile(
 
                 print(f"Profiled config {config_index}/{config_count} - total elapsed time: {timedelta(seconds=tuning_elapsed_time_s)}, compilation time: {compilation_result.compilation_time_s:0.4f}sec, benchmark time: {benchmark_elapsed_time_s:0.4f}sec")
                 profiler_results.append(
-                    ProfilerResult.create_failed_benchmark(config_index, compilation_result.config, err, compilation_result.compilation_time_s, benchmark_elapsed_time_s))
+                    ProfilerResult.create_with_err(
+                        config_index,
+                        compilation_result.config,
+                        dispatch,
+                        compilation_result.compilation_time_s,
+                        benchmark_elapsed_time_s,
+                        err))
                 benchmark_results_writer.write_csv_result(profiler_results[-1])
             else:
                 print(
                     f"Profiled config {config_index}/{config_count} - total elapsed time: {timedelta(seconds=tuning_elapsed_time_s)}, compilation time: {compilation_result.compilation_time_s:0.4f}sec, benchmark time: {benchmark_elapsed_time_s:0.4f}sec with {benchmark_results[0].iterations} iterations")
                 profiler_results.append(
-                    ProfilerResult.create_with_result(config_index, compilation_result.config, benchmark_results, compilation_result.compilation_time_s, benchmark_elapsed_time_s))
+                    ProfilerResult.create_with_benchmark_results(
+                        config_index,
+                        compilation_result.config,
+                        dispatch,
+                        benchmark_results,
+                        compilation_result.compilation_time_s,
+                        benchmark_elapsed_time_s))
                 benchmark_results_writer.write_csv_result(profiler_results[-1])
 
     print(f"Produced {len(profiler_results)} profile results.")

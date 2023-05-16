@@ -1,5 +1,5 @@
 import enum
-from typing import Optional, List, Tuple
+from typing import Optional, List, Tuple, Union
 from pathlib import Path
 import csv
 
@@ -22,22 +22,19 @@ class PROFILER_RESULT_KEYS(str, enum.Enum):
     WORK_GROUP_SIZES = "work_group_sizes"
     PIPELINE_DEPTH = "pipeline_depth"
     PIPELINE = "pipeline"
-    IDENTIFIER = "identifier"
+    OPERATION = "identifier"
     B = "b"
     M = "m"
     N = "n"
     K = "k"
     BENCHMARK_REPETITIONS = "benchmark_repetitions"
     ITERATIONS = "iterations"
-    # PERCENTAGE_OF_PEAK = "percent_of_peak"
+    PERCENTAGE_OF_PEAK = "percent_of_peak"
     TIME_MEAN_MS = "time_mean_milliseconds"
-    CPU_TIME_MEAN_MS = "cpu_time_mean_milliseconds"
     # TIME_MEDIAN_MS = "time_median_milliseconds"
-    # CPU_TIME_MEDIAN_MS = "cpu_time_median_milliseconds"
+    TIME_MIN_MS = "time_min_milliseconds"
     TIME_STD_MS = "time_std_milliseconds"
-    CPU_TIME_STD_MS = "cpu_time_std_milliseconds"
     # TIME_CV_MS = "time_cv_milliseconds"
-    # CPU_TIME_CV_MS = "cpu_time_cv_milliseconds"
     GFLOPS = "gflops"
     COMPILATION_TIME_S = "compilation_time_seconds"
     BENCHMARK_TIME_S = "benchmark_time_seconds"
@@ -46,49 +43,6 @@ class PROFILER_RESULT_KEYS(str, enum.Enum):
 
 def profiler_result_dict_keys() -> dict:
     return [e.value for e in PROFILER_RESULT_KEYS]
-
-
-class ProfilerResult:
-    """Stores the results of each profiler run and its config."""
-
-    def __init__(self,
-                 config_index: int,
-                 config: DispatchConfig,
-                 compilation_successful: bool,
-                 benchmark_successful: bool,
-                 benchmark_results: List[BenchmarkResult] = [],
-                 compiler_error: Optional[CompilerToolError] = None,
-                 benchmark_error: Optional[BenchmarkToolError] = None,
-                 compilation_time: Optional[float] = None,
-                 benchmark_time: Optional[float] = None):
-        self.config_index = config_index
-        self.config = config
-        self.compilation_successful = compilation_successful
-        self.benchmark_successful = benchmark_successful
-        self.benchmark_results = benchmark_results
-        self.compiler_error = compiler_error
-        self.benchmark_error = benchmark_error
-        self.compilation_time = compilation_time
-        self.benchmark_time = benchmark_time
-
-    # def set_percentage_of_peak(self, percentage_of_peak: float):
-    #     self.profiler_result_dict[PROFILER_RESULT_KEYS.PERCENTAGE_OF_PEAK] = percentage_of_peak
-
-    @staticmethod
-    def create_with_result(config_index: int, config: DispatchConfig, benchmark_results: List[BenchmarkResult], compilation_time: float, benchmark_time: float):
-        return ProfilerResult(config_index, config, True, True, benchmark_results, compilation_time=compilation_time, benchmark_time=benchmark_time)
-
-    @staticmethod
-    def create_failed_compilation(config_index: int, config: DispatchConfig, compiler_error: CompilerToolError, compilation_time: float):
-        return ProfilerResult(config_index, config, False, False, None, compiler_error=compiler_error, compilation_time=compilation_time)
-
-    @staticmethod
-    def create_failed_benchmark(config_index: int, config: DispatchConfig, benchmark_error: BenchmarkToolError, compilation_time: float, benchmark_time: float):
-        return ProfilerResult(config_index, config, True, False, None, benchmark_error=benchmark_error, compilation_time=compilation_time, benchmark_time=benchmark_time)
-
-    @staticmethod
-    def create_from_dict(profiler_result_dict: dict):
-        return ProfilerResult(profiler_result_dict)
 
 
 def calculate_gflops(dispatch: Dispatch, runtime_ms: float):
@@ -104,92 +58,163 @@ def calculate_gflops(dispatch: Dispatch, runtime_ms: float):
     return gflops
 
 
-def build_profiler_result_dict(profiler_result: ProfilerResult, dispatch: Dispatch) -> dict:
-    def strip_ms(raw_time: str):
-        return raw_time.split(" ")[0]
+class ProfilerResult:
+    """Stores the results of each profiler run and its config."""
 
-    config = profiler_result.config
-    profiler_result_dict = {
-        PROFILER_RESULT_KEYS.CONFIG_INDEX: profiler_result.config_index,
-        PROFILER_RESULT_KEYS.TILE_SIZE: str(config.tile_size)[1:-1],
-        PROFILER_RESULT_KEYS.WORK_GROUP_SIZES: str(config.workgroup_size)[1:-1],
-        PROFILER_RESULT_KEYS.PIPELINE: config.pipeline_name,
-        PROFILER_RESULT_KEYS.PIPELINE_DEPTH: config.pipeline_depth,
-        PROFILER_RESULT_KEYS.IDENTIFIER: config.operation,
-        PROFILER_RESULT_KEYS.B: dispatch.b,
-        PROFILER_RESULT_KEYS.M: dispatch.m,
-        PROFILER_RESULT_KEYS.N: dispatch.n,
-        PROFILER_RESULT_KEYS.K: dispatch.k,
-        PROFILER_RESULT_KEYS.COMPILATION_TIME_S: profiler_result.compilation_time,
-        PROFILER_RESULT_KEYS.BENCHMARK_TIME_S: profiler_result.benchmark_time,
-    }
+    def __init__(self,
+                 config_index: int,
+                 config: DispatchConfig,
+                 dispatch: Dispatch,
+                 benchmark_repetitions: Optional[int] = None,
+                 iterations: Optional[int] = None,
+                 time_mean_ms: Optional[float] = None,
+                 time_min_ms: Optional[float] = None,
+                 time_std_ms: Optional[float] = None,
+                 compilation_time: Optional[float] = None,
+                 benchmark_time: Optional[float] = None,
+                 err: Union[CompilerToolError, BenchmarkToolError] = None,
+                 dict: Optional[dict] = None):
+        # If the dict is provided, use that directly
+        if dict:
+            self.profiler_result_dict = dict
+            return
+        self.profiler_result_dict = {
+            PROFILER_RESULT_KEYS.CONFIG_INDEX: config_index,
+            PROFILER_RESULT_KEYS.TILE_SIZE: str(config.tile_size)[1:-1],
+            PROFILER_RESULT_KEYS.WORK_GROUP_SIZES: str(config.workgroup_size)[1:-1],
+            PROFILER_RESULT_KEYS.PIPELINE: config.pipeline_name,
+            PROFILER_RESULT_KEYS.PIPELINE_DEPTH: config.pipeline_depth,
+            PROFILER_RESULT_KEYS.OPERATION: config.operation,
+            PROFILER_RESULT_KEYS.B: dispatch.b,
+            PROFILER_RESULT_KEYS.M: dispatch.m,
+            PROFILER_RESULT_KEYS.N: dispatch.n,
+            PROFILER_RESULT_KEYS.K: dispatch.k,
+            PROFILER_RESULT_KEYS.BENCHMARK_REPETITIONS: benchmark_repetitions,
+            PROFILER_RESULT_KEYS.ITERATIONS: iterations,
+            PROFILER_RESULT_KEYS.TIME_MEAN_MS: time_mean_ms,
+            PROFILER_RESULT_KEYS.TIME_MIN_MS: time_min_ms,
+            PROFILER_RESULT_KEYS.TIME_STD_MS: time_std_ms,
+            PROFILER_RESULT_KEYS.COMPILATION_TIME_S: compilation_time,
+            PROFILER_RESULT_KEYS.BENCHMARK_TIME_S: benchmark_time,
+            PROFILER_RESULT_KEYS.ERROR: err,
+        }
 
-    err = None
-    if not profiler_result.compilation_successful:
-        err = str(profiler_result.compiler_error).replace('\n', '|')
-    elif not profiler_result.benchmark_successful:
-        err = str(profiler_result.benchmark_error)
-    else:
+        runtime_ms = None
+        if not err:
+            runtime_ms = float(
+                self.profiler_result_dict[PROFILER_RESULT_KEYS.TIME_MEAN_MS])
+            self.profiler_result_dict.update({
+                PROFILER_RESULT_KEYS.GFLOPS: float(round(calculate_gflops(dispatch, runtime_ms=runtime_ms), 2))})
+
+    @staticmethod
+    def create_with_err(
+            config_index: int,
+            config: DispatchConfig,
+            dispatch: Dispatch,
+            compilation_time: float,
+            benchmark_time: Optional[float],
+            err: Union[CompilerToolError, BenchmarkToolError]):
+        return ProfilerResult(
+            config_index,
+            config,
+            dispatch,
+            benchmark_repetitions=None,
+            iterations=None,
+            time_mean_ms=None,
+            time_min_ms=None,
+            time_std_ms=None,
+            compilation_time=compilation_time,
+            benchmark_time=benchmark_time,
+            err=err)
+
+    @staticmethod
+    def create_with_benchmark_results(
+            config_index: int,
+            config: DispatchConfig,
+            dispatch: Dispatch,
+            benchmark_results: List[BenchmarkResult],
+            compilation_time: float,
+            benchmark_time: float):
+        def strip_ms(raw_time: str):
+            return raw_time.split(" ")[0]
+
+        benchmark_repetitions = 1
+        iterations = 1
+        time_mean_ms = None
+        time_min_ms = None
+        time_std_ms = None
         # Pull key benchmark metrics
-        benchmark_results = profiler_result.benchmark_results
         if len(benchmark_results) == 1:
             # There is only one result
-            benchmark_result_mean = benchmark_results[0]
-            # benchmark_name = benchmark_results[0].benchmark_name
+            benchmark_result = benchmark_results[0]
             iterations = benchmark_results[0].iterations
-
-            profiler_result_dict.update({
-                # PROFILER_RESULT_KEYS.BENCHMARK_NAME: benchmark_name,
-                PROFILER_RESULT_KEYS.BENCHMARK_REPETITIONS: 1,
-                PROFILER_RESULT_KEYS.ITERATIONS: iterations,
-                PROFILER_RESULT_KEYS.TIME_MEAN_MS: strip_ms(benchmark_result_mean.time),
-                PROFILER_RESULT_KEYS.CPU_TIME_MEAN_MS: strip_ms(benchmark_result_mean.cpu_time),
-                # PROFILER_RESULT_KEYS.TIME_MEDIAN_MS: "N/A",
-                # PROFILER_RESULT_KEYS.CPU_TIME_MEDIAN_MS: "N/A",
-                PROFILER_RESULT_KEYS.TIME_STD_MS: "N/A",
-                PROFILER_RESULT_KEYS.CPU_TIME_STD_MS: "N/A",
-                # PROFILER_RESULT_KEYS.TIME_CV_MS: "N/A",
-                # PROFILER_RESULT_KEYS.CPU_TIME_CV_MS: "N/A",
-            })
+            benchmark_repetitions = 1
+            time_mean_ms = strip_ms(benchmark_result.time)
+            time_min_ms = strip_ms(benchmark_result.time)
+            time_std_ms = 0
         else:
             benchmark_result_mean = benchmark_results[-4]
             # benchmark_result_median = benchmark_results[-3]
             benchmark_result_std = benchmark_results[-2]
             # benchmark_result_cv = benchmark_results[-1]
             benchmark_results_remaining = benchmark_results[:-4]
-            benchmark_name = benchmark_results_remaining[0].benchmark_name
+
+            bench_times = [float(strip_ms(bench_result.time))
+                           for bench_result in benchmark_results_remaining]
+
             iterations = benchmark_results_remaining[0].iterations
+            benchmark_repetitions = len(benchmark_results_remaining)
+            time_mean_ms = strip_ms(benchmark_result_mean.time)
+            time_min_ms = min(bench_times)
+            time_std_ms = strip_ms(benchmark_result_std.time)
 
-            profiler_result_dict.update({
-                # PROFILER_RESULT_KEYS.BENCHMARK_NAME: benchmark_name,
-                PROFILER_RESULT_KEYS.BENCHMARK_REPETITIONS: len(benchmark_results_remaining),
-                PROFILER_RESULT_KEYS.ITERATIONS: iterations,
-                PROFILER_RESULT_KEYS.TIME_MEAN_MS: strip_ms(benchmark_result_mean.time),
-                PROFILER_RESULT_KEYS.CPU_TIME_MEAN_MS: strip_ms(benchmark_result_mean.cpu_time),
-                # PROFILER_RESULT_KEYS.TIME_MEDIAN_MS: strip_ms(benchmark_result_median.time),
-                # PROFILER_RESULT_KEYS.CPU_TIME_MEDIAN_MS: strip_ms(benchmark_result_median.cpu_time),
-                PROFILER_RESULT_KEYS.TIME_STD_MS: strip_ms(benchmark_result_std.time),
-                PROFILER_RESULT_KEYS.CPU_TIME_STD_MS: strip_ms(benchmark_result_std.cpu_time),
-                # PROFILER_RESULT_KEYS.TIME_CV_MS: strip_ms(benchmark_result_cv.time),
-                # PROFILER_RESULT_KEYS.CPU_TIME_CV_MS: strip_ms(benchmark_result_cv.cpu_time),
-            })
+        return ProfilerResult(
+            config_index,
+            config,
+            dispatch,
+            benchmark_repetitions,
+            iterations,
+            time_mean_ms,
+            time_min_ms,
+            time_std_ms,
+            compilation_time=compilation_time,
+            benchmark_time=benchmark_time,
+            err=None)
 
-    profiler_result_dict.update({PROFILER_RESULT_KEYS.ERROR: err})
-    
-    runtime_ms = None
-    if not err:
-        runtime_ms = float(profiler_result_dict[PROFILER_RESULT_KEYS.TIME_MEAN_MS])
-        profiler_result_dict.update({
-            PROFILER_RESULT_KEYS.GFLOPS: float(round(calculate_gflops(dispatch, runtime_ms=runtime_ms), 2))})
-    return profiler_result_dict
+    @staticmethod
+    def create_from_dict(profiler_result_dict: dict):
+        config_index = profiler_result_dict[PROFILER_RESULT_KEYS.CONFIG_INDEX]
+        benchmark_repetitions = profiler_result_dict[PROFILER_RESULT_KEYS.BENCHMARK_REPETITIONS]
+        iterations = profiler_result_dict[PROFILER_RESULT_KEYS.ITERATIONS]
+        time_mean_ms = profiler_result_dict[PROFILER_RESULT_KEYS.TIME_MEAN_MS]
+        time_min_ms = profiler_result_dict[PROFILER_RESULT_KEYS.TIME_MIN_MS]
+        time_std_ms = profiler_result_dict[PROFILER_RESULT_KEYS.TIME_STD_MS]
+        compilation_time = profiler_result_dict[PROFILER_RESULT_KEYS.COMPILATION_TIME_S]
+        benchmark_time = profiler_result_dict[PROFILER_RESULT_KEYS.BENCHMARK_TIME_S]
+        err = profiler_result_dict[PROFILER_RESULT_KEYS.ERROR]
+        return ProfilerResult(
+            config_index=config_index,
+            config=None,
+            dispatch=None,
+            benchmark_repetitions=benchmark_repetitions,
+            iterations=iterations,
+            time_mean_ms=time_mean_ms,
+            time_min_ms=time_min_ms,
+            time_std_ms=time_std_ms,
+            compilation_time=compilation_time,
+            benchmark_time=benchmark_time,
+            err=err,
+            dict=profiler_result_dict)
+
+    def set_percentage_of_peak(self, percentage_of_peak: float):
+        self.profiler_result_dict[PROFILER_RESULT_KEYS.PERCENTAGE_OF_PEAK] = percentage_of_peak
 
 
 class ProfilerResultsWriter:
     """Class for writing benchmark results to CSV."""
 
-    def __init__(self, output_csv_path: Path, dispatch: Dispatch):
+    def __init__(self, output_csv_path: Path):
         self.output_csv_path = output_csv_path
-        self.dispatch = dispatch
         self.field_names = profiler_result_dict_keys()
 
     def initialize_output_csv(self, force: bool = False):
@@ -203,8 +228,7 @@ class ProfilerResultsWriter:
         """Save a profile result to csv."""
         with open(self.output_csv_path, mode="a", newline="") as csv_f:
             writer = csv.DictWriter(csv_f, fieldnames=self.field_names)
-            profiler_result_dict = build_profiler_result_dict(
-                profiler_result, self.dispatch)
+            profiler_result_dict = profiler_result.profiler_result_dict
             writer.writerow(profiler_result_dict)
 
     def write_empty_line(self):
@@ -223,6 +247,7 @@ class ProfilerResultsReader:
         self.profiler_results_success: List[ProfilerResult] = []
         self.profiler_results_failed: List[ProfilerResult] = []
         self.profiler_result_control: ProfilerResult = None
+        self.dispatch = None
         self.read_csv()
 
     def read_csv(self):
@@ -246,15 +271,15 @@ class ProfilerResultsReader:
             profiler_result for profiler_result in self.profiler_results if not succeeded(profiler_result)]
 
         peak_time_ms = float(
-            self.profiler_results_success[0].profiler_result_dict[PROFILER_RESULT_KEYS.CPU_TIME_MEAN_MS])
+            self.profiler_results_success[0].profiler_result_dict[PROFILER_RESULT_KEYS.TIME_MEAN_MS])
         for profiler_result in self.profiler_results_success:
             percentage_of_peak = float(
-                profiler_result.profiler_result_dict[PROFILER_RESULT_KEYS.CPU_TIME_MEAN_MS]) / peak_time_ms
+                profiler_result.profiler_result_dict[PROFILER_RESULT_KEYS.TIME_MEAN_MS]) / peak_time_ms
             profiler_result.set_percentage_of_peak(percentage_of_peak)
 
         # Separate the control from the successful profiles
         self.profiler_result_control = [
-            control for control in self.profiler_results_success if control.profiler_result_dict[PROFILER_RESULT_KEYS.IDENTIFIER] == "control"][0]
+            control for control in self.profiler_results_success if control.profiler_result_dict[PROFILER_RESULT_KEYS.OPERATION] == "default"][0]
         self.profiler_results_success.remove(self.profiler_result_control)
 
     def write_updated_results(self, csv_output_path: Path):

@@ -40,7 +40,7 @@ def run_program(
 
         print("\n\n===========================================")
         print(
-            f"Running program: {profiler_program.name}.\n Placing template in model in: {template_mlir_model_path}.\n Outputting csv results to: {output_csv_path}")
+            f"Tuning dispatch: {profiler_program.name}.\n Placing template in model in: {template_mlir_model_path}.\n Outputting csv results to: {output_csv_path}")
         print("===========================================")
 
         run_profile(
@@ -54,7 +54,7 @@ def run_program(
             benchmark_repetitions,
             benchmark_dispatch_batch_size,
             operation_type=profiler_program.operation_type)
-        print(f"Finished program: {profiler_program.name}")
+        print(f"Finished tuning dispatch: {profiler_program.name}")
 
 def parse_arguments():
     parser = argparse.ArgumentParser(
