@@ -27,7 +27,7 @@ func.func @benchmark_matmul() -> tensor<{m}x{n}x{data_type}> {{
 """
 
 BATCH_MATMUL_TEMPLATE = """{compilation_info}
-func.func @benchmark_batch_matmul) -> tensor<{b}x{m}x{n}x{data_type}> {{
+func.func @benchmark_batch_matmul() -> tensor<{b}x{m}x{n}x{data_type}> {{
     %cst = arith.constant 1.0 : {data_type}
     %lhs = arith.constant dense<1.0> : tensor<{b}x{m}x{k}x{data_type}>
     %rhs = arith.constant dense<1.0> : tensor<{b}x{k}x{n}x{data_type}>
@@ -64,7 +64,7 @@ def generate_model(dispatch: Dispatch, config: Optional[DispatchConfig]):
             k=dispatch.k,
         )
     elif dispatch.operation == OperationType.BATCH_MATMUL:
-        model_text = MATMUL_TEMPLATE.format(
+        model_text = BATCH_MATMUL_TEMPLATE.format(
             compilation_info=compilation_info,
             compilation_info_tag=compilation_info_tag,
             data_type=dispatch.data_type.iree_type,

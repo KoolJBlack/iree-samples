@@ -12,10 +12,8 @@ from iree.runtime.benchmark import BenchmarkResult, BenchmarkToolError
 ###################################################################################################
 
 
-"""Enum for profiler result dict keys."""
-
-
 class PROFILER_RESULT_KEYS(str, enum.Enum):
+    """Enum for profiler result dict keys."""
     CONFIG_INDEX = "config_index"
     # BENCHMARK_NAME = "benchmark_name"
     TILE_SIZE = "tile_sizes"
