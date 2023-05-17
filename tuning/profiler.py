@@ -72,7 +72,7 @@ def compile_with_configs(
         start_time = time.time()
         annotated_model = generate_model(
             dispatch, None if config == DEFAULT_CONFIG else config)
-        
+
         # Compile model
         flatbuffer_blob, err = compile_module_to_flatbuffer(
             str(annotated_model), target_device, CompilerFrontend.MHLO, benchmark_dispatch_batch_size, extra_compilation_args)
@@ -242,7 +242,7 @@ def run_profile(
 
             # Benchmark model
             benchmark_results, benchmark_err = run_benchmark_module(compilation_result.flatbuffer_blob, entry_function="forward",
-                                                          benchmark_repetitions=benchmark_repetitions, benchmark_dispatch_batch_size=benchmark_dispatch_batch_size)
+                                                                    benchmark_repetitions=benchmark_repetitions, benchmark_dispatch_batch_size=benchmark_dispatch_batch_size)
 
             benchmark_elapsed_time_s = time.time() - benchmark_start_time_s
             tuning_elapsed_time_s = time.time() - tuning_start_time_s

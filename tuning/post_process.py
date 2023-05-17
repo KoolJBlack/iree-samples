@@ -5,7 +5,8 @@ import glob
 from typing import Optional, List, Tuple
 import math
 
-from results.results import ProfilerResultsReader, ProfilerResultsWriter
+from results.results import ProfilerResultsReader, ProfilerResultsWriter, PROFILER_RESULT_KEYS
+from results.shark_annotate import assemble_shark_config_object
 
 ###################################################################################################
 # Script for post processing completed profile CSVs. Use for analysis of results. 
@@ -31,6 +32,10 @@ def parse_arguments():
                         help="Path to output the combined top results",
                         required=False,
                         default=10)
+    parser.add_argument("--shark_config_path",
+                        type=Path,
+                        help="Path to output a shark config with the top results",
+                        required=False)
     return parser.parse_args()
 
 def main(args: argparse.ArgumentParser):
@@ -51,10 +56,10 @@ def main(args: argparse.ArgumentParser):
         Path(csv_output_path).parent.mkdir(parents=True, exist_ok=True)
         result_reader.write_updated_results(csv_output_path)
     
+    # Sort profile results by dispatch size
+    result_readers.sort(key=lambda result_reader: math.prod(result_reader.get_dispatch_shape()))
+    
     if args.top_csv_path:
-        # Sort profile results by dispatch size
-        result_readers.sort(key=lambda result_reader: math.prod(result_reader.get_dispatch_shape()))
-
         writer = ProfilerResultsWriter(args.top_csv_path)
         writer.initialize_output_csv(force=True)
         for result_reader in result_readers:        
@@ -65,6 +70,28 @@ def main(args: argparse.ArgumentParser):
                 writer.write_csv_result(result)
             writer.write_empty_line()
 
+    def string_to_int_list(str) -> List[int]:
+      return [int(x) for x in str.split(',')]
+    
+    if args.shark_config_path:
+        with open(args.shark_config_path, mode="w", newline="") as shark_config_f:
+            for result_reader in result_readers:        
+                result_dict = result_reader.profiler_results_success[0].profiler_result_dict
+                tile_sizes = result_dict[PROFILER_RESULT_KEYS.TILE_SIZE]
+                workgroup_sizes = result_dict[PROFILER_RESULT_KEYS.WORK_GROUP_SIZES]
+                shark_config_json = assemble_shark_config_object(
+                    string_to_int_list(tile_sizes),
+                    string_to_int_list(workgroup_sizes),
+                    result_dict[PROFILER_RESULT_KEYS.PIPELINE],
+                    int(result_dict[PROFILER_RESULT_KEYS.PIPELINE_DEPTH]),
+                    result_dict[PROFILER_RESULT_KEYS.OPERATION],
+                    int(result_dict[PROFILER_RESULT_KEYS.B]),
+                    int(result_dict[PROFILER_RESULT_KEYS.M]),
+                    int(result_dict[PROFILER_RESULT_KEYS.N]),
+                    int(result_dict[PROFILER_RESULT_KEYS.K]),
+                )
+                print(shark_config_json)
+                shark_config_f.write(shark_config_json + "\n")
 
 if __name__ == "__main__":
     main(parse_arguments())
