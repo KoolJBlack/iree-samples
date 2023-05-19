@@ -17,7 +17,7 @@ def generate_tile_sizes(pipeline: Pipeline, data_type: DataType, input_shape: Li
     """"Returns list of possible tile sizes for input shape and pipeline"""
     tile_sizes = []
 
-    if pipeline == Pipeline.GPU_TENSORCORE:
+    if pipeline == Pipeline.GPU_TENSORCORE or pipeline == Pipeline.GPU_TENSORCORE_MMASYNC:
         # Tensorcor main dims M, N, K
         tensorcore_mn_sizes = [16, 32, 64, 128, 256]
         tensorcore_k_sizes = [16, 32, 64, 128]
@@ -39,32 +39,25 @@ def generate_workgroup_sizes(pipeline: Pipeline, input_shape: List[int], tile_si
     """"Returns list of possible workgroup sizes for tile size"""
     workgroup_sizes = []
 
-    if pipeline == Pipeline.GPU_TENSORCORE:
+    if pipeline == Pipeline.GPU_TENSORCORE or pipeline == Pipeline.GPU_TENSORCORE_MMASYNC:
         # Tensorcore main dims X, Y, Z
         tensorcore_x_sizes = [32, 64, 128, 256, 512]
-        tensorcore_y_sizes = [1, 2]
+        tensorcore_y_sizes = [1, 2, 4]
         # For tensorcore, workgroup Z is always 1
         tensorcore_z_sizes = [1]
         workgroup_sizes = list(product(
             tensorcore_x_sizes, tensorcore_y_sizes, tensorcore_z_sizes))
-
-        tensorcore_x_sizes = [32, 64, 128, 256]
-        tensorcore_y_sizes = [4]
-        workgroup_sizes2 = list(product(
-            tensorcore_x_sizes, tensorcore_y_sizes, tensorcore_z_sizes))
-        workgroup_sizes.extend(workgroup_sizes2)
 
     return workgroup_sizes
 
 
 def generate_pipeline_depth(pipeline: Pipeline, input_shape: List[int], tile_size: List[int]) -> List[int]:
     """"Returns list of possible pipeline depth"""
-    if pipeline != Pipeline.GPU_TENSORCORE:
-        return []
+    if pipeline == Pipeline.GPU_TENSORCORE or pipeline == Pipeline.GPU_TENSORCORE_MMASYNC:
+        # For tensorcore, usually between 1 and 12, increments of 1
+        return [x for x in range(1, 6)]
 
-    # For tensorcore, usually between 1 and 12, increments of 1
-    return [x for x in range(1, 6)]
-
+    return []
 
 def cuda_tensorcore_verify(dispatch: Dispatch, config: DispatchConfig) -> bool:
     """"Verifies the CUDA config on Tensorcor. Returns true if pass."""
@@ -162,7 +155,7 @@ def cuda_tensorcore_verify(dispatch: Dispatch, config: DispatchConfig) -> bool:
 def generate_cuda_configs(dispatch: Dispatch) -> List[DispatchConfig]:
     """Generates configs for CUDA.
     """
-    if dispatch.pipeline_name != Pipeline.GPU_TENSORCORE:
+    if dispatch.pipeline_name != Pipeline.GPU_TENSORCORE and dispatch.pipeline_name != Pipeline.GPU_TENSORCORE_MMASYNC:
         raise RuntimeError("Only GPU Tensorcore supported for configs.")
     configs = []
     pipeline = dispatch.pipeline_name

@@ -44,15 +44,16 @@ def run_program(
         print("===========================================")
 
         run_profile(
-            profiler_program.b,
-            profiler_program.m,
-            profiler_program.n,
-            profiler_program.k,
-            profiler_program.data_type,
-            profiler_program.target_backend,
-            output_csv_path,
-            benchmark_repetitions,
-            benchmark_dispatch_batch_size,
+            b=profiler_program.b,
+            m=profiler_program.m,
+            n=profiler_program.n,
+            k=profiler_program.k,
+            data_type=profiler_program.data_type,
+            target_backend=profiler_program.target_backend,
+            output_csv_path=output_csv_path,
+            benchmark_repetitions=benchmark_repetitions,
+            benchmark_dispatch_batch_size=benchmark_dispatch_batch_size,
+            pipeline=profiler_program.pipeline,
             operation_type=profiler_program.operation_type)
         print(f"Finished tuning dispatch: {profiler_program.name}")
 
@@ -79,7 +80,7 @@ def parse_arguments():
                         type=int,
                         help="Number of iterations for each dispatch in benchmark",
                         required=False,
-                        default=100)
+                        default=200)
     return parser.parse_args()
 
 

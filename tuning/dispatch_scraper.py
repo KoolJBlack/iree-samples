@@ -12,9 +12,8 @@ from utils.data_types import OperationType, ProfilerProgram, Pipeline, Operation
 
 def dump_profile_programs(input_mlir_model: Path,
                           output_program_path: Path,
-                          data_type: DataType = DataType.F32,
                           target_backend: TargetBackend = TargetBackend.CUDA,
-                          pipeline: Pipeline = Pipeline.GPU_TENSORCORE):
+                          pipeline: Pipeline = Pipeline.GPU_TENSORCORE_MMASYNC):
     """Parse an mlir model dump after 'tile distribute workgroups pass'. Identifies all dispatches that match the given pipeline and dumps them to json file."""
 
     pipeline_marker = pipeline.value
@@ -33,16 +32,17 @@ def dump_profile_programs(input_mlir_model: Path,
 
     print(f"Analyzed input: {input_mlir_model} with {lines_count} lines.")
     print(
-        f"Found {len(pipeline_lines)} dispatches with marker: {pipeline_marker}")
+        f"Found {len(pipeline_lines)} dispatches with marker: {pipeline_marker}\n")
 
     # Regex match each dispatch name to get parameters
     pattern = re.compile(
-        "@forward_dispatch_(?P<dispatch_index>\d+)_(?P<operation>matmul|batch_matmul|generic)_(?P<input_shape>(?:\d+)(?:x\d+)+)+\s", re.IGNORECASE)
+        "@forward_dispatch_(?P<dispatch_index>\d+)_(?P<operation>matmul|batch_matmul|generic)_(?P<input_shape>(?:\d+)(?:x\d+)+)+_(?P<data_type>f16|f32)\s", re.IGNORECASE)
 
     profiler_programs = []
     unique_names = set()
     for line in pipeline_lines:
         # Find function name. Split out parameters.
+        # print(f"Analyzing line: {line}")
         match = pattern.search(line)
 
         dispatch_index = int(match.group("dispatch_index"))
@@ -52,9 +52,8 @@ def dump_profile_programs(input_mlir_model: Path,
             operation_type = OperationType.MATMUL
         elif operation_str == "batch_matmul":
             operation_type = OperationType.BATCH_MATMUL
-        elif operation_str == "generic":
-            operation_type = OperationType.GENERIC
         input_shape = match.group("input_shape").split("x")
+        data_type = DataType.from_string(match.group("data_type"))
 
         dispatch_name = "forward_dispatch_" + operation_str + "_" + \
             ("x".join(input_shape)) + "x" + data_type.iree_type
@@ -69,11 +68,11 @@ def dump_profile_programs(input_mlir_model: Path,
         # Create profiler program
         b = 0
         if len(input_shape) == 4:
-            b = input_shape[0]
+            b = int(input_shape[0])
             input_shape = input_shape[1:]
-        m = input_shape[0]
-        n = input_shape[1]
-        k = input_shape[2]
+        m = int(input_shape[0])
+        n = int(input_shape[1])
+        k = int(input_shape[2])
         template_filename = dispatch_name + ".mlir"
         result_filename = dispatch_name + "_results.csv"
         profiler_program = ProfilerProgram(dispatch_name, b, m, n, k, data_type,
@@ -89,7 +88,6 @@ def dump_profile_programs(input_mlir_model: Path,
     print(f"{len(profiler_programs)} unique profiler programs written to {output_program_path}")
 
 
-
 def combine_programs(
         input_program_dir: Path,
         output_program_path: Path):
@@ -98,6 +96,7 @@ def combine_programs(
     raw_program_count = 0
     input_file_count = 0
     profiler_programs_dict = {}
+    profiler_programs_list = []  # Preserve order
     for child in input_program_dir.iterdir():
         if child.suffix != ".json":
             continue
@@ -116,14 +115,16 @@ def combine_programs(
                     continue
 
                 profiler_programs_dict[program_name] = profiler_program
+                profiler_programs_list.append(profiler_program)
 
     # Dump the profiler programs
     with open(output_program_path, "w") as f:
-        for profiler_program in profiler_programs_dict.values():
+        for profiler_program in profiler_programs_list:
             json_str = profiler_program.dump_json()
             f.write(json_str + "\n")
 
     print(f"Combined {input_file_count} tuning programs with {raw_program_count} programs into {len(profiler_programs_dict.values())} unique programs.")
+
 
 def parse_arguments():
     parser = argparse.ArgumentParser(
@@ -146,7 +147,7 @@ def parse_arguments():
                         default=None)
     # Combine
     parser.add_argument("--input_programs_dir",
-                        type=dir_path,
+                        type=Path,
                         help="Path to dir containing programs to combine",
                         required=False,
                         default=None)
@@ -157,6 +158,7 @@ def parse_arguments():
                         default=None)
 
     return parser.parse_args()
+
 
 def main(args: argparse.ArgumentParser):
     if args.mode == "dump":

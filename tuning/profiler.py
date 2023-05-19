@@ -23,18 +23,18 @@ from results.results import ProfilerResult, ProfilerResultsWriter
 
 def compile_module_to_flatbuffer(
         module,
-        target_device: TargetDevice,
+        target_backend: TargetBackend,
         frontend: CompilerFrontend = CompilerFrontend.MHLO,
         benchmark_dispatch_batch_size: Optional[int] = None,
         extra_args: Optional[List] = []) -> tuple[Optional[bytes], Optional[CompilerToolError]]:
     """Compiles mlir module and returns the flatbuffer blob"""
     args = []
-    if target_device == TargetDevice.CUDA:
+    if target_backend == TargetBackend.CUDA:
         args.extend(iree_compile_arguments(TargetBackend.CUDA, [
-                    CudaFlavors.SHARK_DEFAULT, CudaFlavors.CUDA_SM_80]))
+                    CudaFlavors.CLI_A2_HIGHGPU, CudaFlavors.CUDA_SM_80]))
     else:
         raise ValueError(
-            "Only `cuda` target device is supported for benchmarking")
+            "Only `cuda` target backend is supported for benchmarking")
 
     if benchmark_dispatch_batch_size:
         args.append(
@@ -47,7 +47,7 @@ def compile_module_to_flatbuffer(
     try:
         flatbuffer_blob = ireec.compile_str(
             module,
-            target_backends=[target_device],
+            target_backends=[target_backend],
             extra_args=args,
             input_type=input_type,
         )
@@ -60,7 +60,7 @@ def compile_module_to_flatbuffer(
 
 def compile_with_configs(
         dispatch: Dispatch,
-        target_device: TargetDevice,
+        target_backend: TargetBackend,
         configs: List[DispatchConfig],
         operation_type: OperationType,
         benchmark_dispatch_batch_size: int,
@@ -75,7 +75,7 @@ def compile_with_configs(
 
         # Compile model
         flatbuffer_blob, err = compile_module_to_flatbuffer(
-            str(annotated_model), target_device, CompilerFrontend.MHLO, benchmark_dispatch_batch_size, extra_compilation_args)
+            str(annotated_model), target_backend, CompilerFrontend.MHLO, benchmark_dispatch_batch_size, extra_compilation_args)
         elapsed_time = time.time() - start_time
         return CompilationResult(config, flatbuffer_blob, err, elapsed_time)
 
@@ -144,10 +144,10 @@ def run_profile(
         output_csv_path: Path,
         benchmark_repetitions: int,
         benchmark_dispatch_batch_size: int,
+        pipeline: Pipeline,
+        operation_type: OperationType,
         extra_compilation_args: List[str] = [],
         compilation_parallelism: int = 1,
-        pipeline: Pipeline = Pipeline.GPU_TENSORCORE,
-        operation_type: OperationType = OperationType.MATMUL,
         config_start_index: int = 0,
         config_end_index: Optional[int] = None):
     """Run the profiler."""
@@ -211,7 +211,7 @@ def run_profile(
         # For each config, annotate the model, compile and benchmark
         compilation_results = compile_with_configs(
             dispatch,
-            target_device,
+            target_backend,
             config_group,
             operation_type,
             benchmark_dispatch_batch_size,

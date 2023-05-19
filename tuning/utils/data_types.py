@@ -28,7 +28,7 @@ class DataType(enum.Enum):
     @staticmethod
     def from_string(s: str):
         try: 
-            return DataType[s]
+            return DataType[s.capitalize()]
         except KeyError:
             raise ValueError()
 
@@ -39,21 +39,19 @@ class DataType(enum.Enum):
 @enum.unique
 class CompilerFrontend(str, enum.Enum):
     MHLO = "mhlo"
+    STABLEHLO = "stablehlo"
 
 
 @enum.unique
-class TargetBackend(enum.Enum):
+class TargetBackend(str, enum.Enum):
     """ Target backend for IREE Compile
     """
     CUDA = "cuda"
 
-    def __str__(self):
-        return self.name
-
     @staticmethod
     def from_string(s: str):
         try:
-            return TargetBackend[s]
+            return TargetBackend[s.capitalize()]
         except KeyError:
             raise ValueError()
 
@@ -90,6 +88,7 @@ class CompilationResult:
 
 @enum.unique
 class Pipeline(str, enum.Enum):
+    GPU_TENSORCORE_MMASYNC = "LLVMGPUMatmulTensorCoreMmaSync"
     GPU_TENSORCORE = "LLVMGPUMatmulTensorCore"
     GPU_SIMT = "LLVMGPUMatmulSimt"
 
@@ -208,7 +207,9 @@ class ProfilerProgram:
             raise ValueError("Only target backend CUDA supported")
 
         pipeline = None
-        if json_dict["pipeline"] == Pipeline.GPU_TENSORCORE.value:
+        if json_dict["pipeline"] == Pipeline.GPU_TENSORCORE_MMASYNC.value:
+            pipeline = Pipeline.GPU_TENSORCORE_MMASYNC
+        elif json_dict["pipeline"] == Pipeline.GPU_TENSORCORE.value:
             pipeline = Pipeline.GPU_TENSORCORE
         elif json_dict["pipeline"] == Pipeline.GPU_SIMT.value:
             pipeline = Pipeline.GPU_SIMT
