@@ -41,7 +41,9 @@ def generate_workgroup_sizes(pipeline: Pipeline, input_shape: List[int], tile_si
 
     if pipeline == Pipeline.GPU_TENSORCORE or pipeline == Pipeline.GPU_TENSORCORE_MMASYNC:
         # Tensorcore main dims X, Y, Z
-        tensorcore_x_sizes = [32, 64, 128, 256, 512]
+        def to_threads(warp):
+            return warp * 32
+        tensorcore_x_sizes = list(map(to_threads, [1, 2, 4, 8, 16]))
         tensorcore_y_sizes = [1, 2, 4]
         # For tensorcore, workgroup Z is always 1
         tensorcore_z_sizes = [1]
@@ -53,14 +55,15 @@ def generate_workgroup_sizes(pipeline: Pipeline, input_shape: List[int], tile_si
 
 def generate_pipeline_depth(pipeline: Pipeline, input_shape: List[int], tile_size: List[int]) -> List[int]:
     """"Returns list of possible pipeline depth"""
-    if pipeline == Pipeline.GPU_TENSORCORE or pipeline == Pipeline.GPU_TENSORCORE_MMASYNC:
+    if pipeline == Pipeline.GPU_TENSORCORE:
         # For tensorcore, usually between 1 and 12, increments of 1
-        return [x for x in range(1, 6)]
-
+        return [x for x in range(2, 6)]
+    elif pipeline == Pipeline.GPU_TENSORCORE_MMASYNC:
+        return [x for x in range(3, 6)]
     return []
 
 def cuda_tensorcore_verify(dispatch: Dispatch, config: DispatchConfig) -> bool:
-    """"Verifies the CUDA config on Tensorcor. Returns true if pass."""
+    """"Verifies the CUDA config on Tensorcore, based on Verifiers.cpp. Returns true if pass."""
     # Fixed constants
     dim_x = 0
     dim_y = 1
@@ -71,11 +74,17 @@ def cuda_tensorcore_verify(dispatch: Dispatch, config: DispatchConfig) -> bool:
     warp_size = 32
 
     iree_tensorcore_shape = None
-    if dispatch.data_type == DataType.F16:
-        iree_tensorcore_shape = [16, 16, 16]
-    elif dispatch.data_type == DataType.F32:
-        iree_tensorcore_shape = [16, 16, 8]
-    else:
+    if dispatch.pipeline_name == Pipeline.GPU_TENSORCORE:
+        if dispatch.data_type == DataType.F16:
+            iree_tensorcore_shape = [16, 16, 16]
+        elif dispatch.data_type == DataType.F32:
+            iree_tensorcore_shape = [16, 16, 8]
+    if dispatch.pipeline_name == Pipeline.GPU_TENSORCORE_MMASYNC:
+        if dispatch.data_type == DataType.F16:
+            iree_tensorcore_shape = [16, 8, 16]
+        elif dispatch.data_type == DataType.F32:
+            iree_tensorcore_shape = [16, 8, 8]  
+    if not iree_tensorcore_shape:
         raise RuntimeError("Unsupported tensorcore shape")
 
     input_shape = [dispatch.m, dispatch.n, dispatch.k]
@@ -137,15 +146,17 @@ def cuda_tensorcore_verify(dispatch: Dispatch, config: DispatchConfig) -> bool:
     matmul_mem_bytes = (lhs_mem_bytes + rhs_mem_bytes) * config.pipeline_depth
     if matmul_mem_bytes > shared_mem_bytes:
         return False
+    # if (thread_block_shape[dim_m] + thread_block_shape[dim_n]) * thread_block_shape[dim_k] * config.pipeline_depth * dispatch.data_type.bytes_size > shared_mem_bytes:
+    #     return False
 
-    # # Can only software pipeline if tile size is smaller than K
-    # if len(input_shape) == 4:
-    #     if tile_size[3] == input_shape[2]:
-    #         return [1]
-    # if len(input_shape) == 3:
-    #     if tile_size[2] == input_shape[1]:
-    #         return [1]
+    return True
 
+def cuda_tensorcore_prune(dispatch: Dispatch, config: DispatchConfig) -> bool:
+    """"A pruning pass to remove configs that aren't expected to be performant."""
+    # if dispatch.pipeline_name == Pipeline.GPU_TENSORCORE_MMASYNC:
+    #     num_warps = reduce(mul, config.workgroup_size) / 32
+    #     if num_warps < 4: 
+    #         return False
     return True
 
 # General Configs
@@ -182,9 +193,18 @@ def generate_cuda_configs(dispatch: Dispatch) -> List[DispatchConfig]:
                     workgroup_size=workgroup_size,
                     pipeline_depth=pipeline_depth,
                 )
-                if cuda_tensorcore_verify(dispatch, dispatch_config):
-                    configs.append(dispatch_config)
-
+                configs.append(dispatch_config)
+    # configs = [
+    #     DispatchConfig(
+    #         Pipeline.GPU_TENSORCORE_MMASYNC,
+    #         OperationType.MATMUL,
+    #         tile_size=[128, 256, 16],
+    #         workgroup_size=[128, 2, 1],
+    #         pipeline_depth=4 
+    #         )
+    # ]
+    configs = [dispatch_config for dispatch_config in configs if cuda_tensorcore_verify(dispatch, dispatch_config)]
+    configs = [dispatch_config for dispatch_config in configs if cuda_tensorcore_prune(dispatch, dispatch_config)]
     return configs
 
 
