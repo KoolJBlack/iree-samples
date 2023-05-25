@@ -102,7 +102,14 @@ class Pipeline(str, enum.Enum):
 class OperationType(str, enum.Enum):
     MATMUL = "matmul"
     BATCH_MATMUL = "batch_matmul"
-    
+
+    @staticmethod
+    def from_string(s: str):
+        try:
+            return OperationType[s.upper()]
+        except KeyError:
+            raise ValueError(f"OperationType: {s}")
+
     def __str__(self):
         return self.name
 

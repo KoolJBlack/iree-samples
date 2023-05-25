@@ -3,7 +3,7 @@ from typing import Optional, List, Tuple, Union
 from pathlib import Path
 import csv
 
-from utils.data_types import DispatchConfig, Dispatch, OperationType
+from utils.data_types import DispatchConfig, Dispatch, OperationType, Pipeline
 from iree.compiler import CompilerToolError
 from iree.runtime.benchmark import BenchmarkResult, BenchmarkToolError
 
@@ -43,13 +43,19 @@ def profiler_result_dict_keys() -> dict:
     return [e.value for e in PROFILER_RESULT_KEYS]
 
 
-def calculate_gflops(dispatch: Dispatch, runtime_ms: float):
+def calculate_gflops(
+        b: Optional[int],
+        m: int,
+        n: int,
+        k: int,
+        operation: OperationType,
+        runtime_ms: float):
     """Returns the gflops"""
-    if dispatch.operation == OperationType.MATMUL:
-        matmul_floating_operations = 2 * dispatch.m * dispatch.n * dispatch.k
-    elif dispatch.operation == OperationType.BATCH_MATMUL:
-        matmul_floating_operations = 2 * dispatch.b * \
-            dispatch.m * dispatch.n * dispatch.k
+    if operation == OperationType.MATMUL:
+        matmul_floating_operations = 2 * m * n * k
+    elif operation == OperationType.BATCH_MATMUL:
+        matmul_floating_operations = 2 * b * \
+            m * n * k
     else:
         raise RuntimeError("unable to calculate gflops for non matmul")
     gflops = float(matmul_floating_operations) / runtime_ms / 1.0e6
@@ -61,8 +67,15 @@ class ProfilerResult:
 
     def __init__(self,
                  config_index: int,
-                 config: DispatchConfig,
-                 dispatch: Dispatch,
+                 tile_size: List[int],
+                 workgroup_size: List[int],
+                 pipeline_depth: int,
+                 pipeline_name: Pipeline,
+                 operation: OperationType,
+                 b=Optional[int],
+                 m=int,
+                 n=int,
+                 k=int,
                  benchmark_repetitions: Optional[int] = None,
                  iterations: Optional[int] = None,
                  time_mean_ms: Optional[float] = None,
@@ -70,23 +83,18 @@ class ProfilerResult:
                  time_std_ms: Optional[float] = None,
                  compilation_time: Optional[float] = None,
                  benchmark_time: Optional[float] = None,
-                 err: Union[CompilerToolError, BenchmarkToolError] = None,
-                 dict: Optional[dict] = None):
-        # If the dict is provided, use that directly
-        if dict:
-            self.profiler_result_dict = dict
-            return
+                 err: Union[CompilerToolError, BenchmarkToolError] = None):
         self.profiler_result_dict = {
             PROFILER_RESULT_KEYS.CONFIG_INDEX: config_index,
-            PROFILER_RESULT_KEYS.TILE_SIZE: str(config.tile_size)[1:-1],
-            PROFILER_RESULT_KEYS.WORK_GROUP_SIZES: str(config.workgroup_size)[1:-1],
-            PROFILER_RESULT_KEYS.PIPELINE: config.pipeline_name,
-            PROFILER_RESULT_KEYS.PIPELINE_DEPTH: config.pipeline_depth,
-            PROFILER_RESULT_KEYS.OPERATION: config.operation,
-            PROFILER_RESULT_KEYS.B: dispatch.b,
-            PROFILER_RESULT_KEYS.M: dispatch.m,
-            PROFILER_RESULT_KEYS.N: dispatch.n,
-            PROFILER_RESULT_KEYS.K: dispatch.k,
+            PROFILER_RESULT_KEYS.TILE_SIZE: str(tile_size)[1:-1] if not "default" in tile_size else tile_size,
+            PROFILER_RESULT_KEYS.WORK_GROUP_SIZES: str(workgroup_size)[1:-1] if not "default" in workgroup_size else workgroup_size,
+            PROFILER_RESULT_KEYS.PIPELINE: pipeline_name,
+            PROFILER_RESULT_KEYS.PIPELINE_DEPTH: pipeline_depth,
+            PROFILER_RESULT_KEYS.OPERATION: operation,
+            PROFILER_RESULT_KEYS.B: b,
+            PROFILER_RESULT_KEYS.M: m,
+            PROFILER_RESULT_KEYS.N: n,
+            PROFILER_RESULT_KEYS.K: k,
             PROFILER_RESULT_KEYS.BENCHMARK_REPETITIONS: benchmark_repetitions,
             PROFILER_RESULT_KEYS.ITERATIONS: iterations,
             PROFILER_RESULT_KEYS.TIME_MEAN_MS: time_mean_ms,
@@ -102,7 +110,7 @@ class ProfilerResult:
             runtime_ms = float(
                 self.profiler_result_dict[PROFILER_RESULT_KEYS.TIME_MEAN_MS])
             self.profiler_result_dict.update({
-                PROFILER_RESULT_KEYS.GFLOPS: float(round(calculate_gflops(dispatch, runtime_ms=runtime_ms), 2))})
+                PROFILER_RESULT_KEYS.GFLOPS: float(round(calculate_gflops(b, m, n, k, operation, runtime_ms=runtime_ms), 2))})
 
     @staticmethod
     def create_with_err(
@@ -114,8 +122,15 @@ class ProfilerResult:
             err: Union[CompilerToolError, BenchmarkToolError]):
         return ProfilerResult(
             config_index,
-            config,
-            dispatch,
+            config.tile_size,
+            config.workgroup_size,
+            config.pipeline_depth,
+            config.pipeline_name,
+            config.operation,
+            dispatch.b,
+            dispatch.m,
+            dispatch.n,
+            dispatch.k,
             benchmark_repetitions=None,
             iterations=None,
             time_mean_ms=None,
@@ -168,8 +183,15 @@ class ProfilerResult:
 
         return ProfilerResult(
             config_index,
-            config,
-            dispatch,
+            config.tile_size,
+            config.workgroup_size,
+            config.pipeline_depth,
+            config.pipeline_name,
+            config.operation,
+            dispatch.b,
+            dispatch.m,
+            dispatch.n,
+            dispatch.k,
             benchmark_repetitions,
             iterations,
             time_mean_ms,
@@ -181,28 +203,47 @@ class ProfilerResult:
 
     @staticmethod
     def create_from_dict(profiler_result_dict: dict):
-        config_index = profiler_result_dict[PROFILER_RESULT_KEYS.CONFIG_INDEX]
-        benchmark_repetitions = profiler_result_dict[PROFILER_RESULT_KEYS.BENCHMARK_REPETITIONS]
-        iterations = profiler_result_dict[PROFILER_RESULT_KEYS.ITERATIONS]
-        time_mean_ms = profiler_result_dict[PROFILER_RESULT_KEYS.TIME_MEAN_MS]
-        time_min_ms = profiler_result_dict[PROFILER_RESULT_KEYS.TIME_MIN_MS]
-        time_std_ms = profiler_result_dict[PROFILER_RESULT_KEYS.TIME_STD_MS]
-        compilation_time = profiler_result_dict[PROFILER_RESULT_KEYS.COMPILATION_TIME_S]
-        benchmark_time = profiler_result_dict[PROFILER_RESULT_KEYS.BENCHMARK_TIME_S]
-        err = profiler_result_dict[PROFILER_RESULT_KEYS.ERROR]
+        def try_int(input):
+            try:
+                return int(input)
+            except:
+                return input
+
+        def try_float(input):
+            try:
+                return float(input)
+            except:
+                return input
+
+        def to_int_list(input):
+            if "default" in input:
+                return input
+            return [int(x) for x in input.split(",")]
+
         return ProfilerResult(
-            config_index=config_index,
-            config=None,
-            dispatch=None,
-            benchmark_repetitions=benchmark_repetitions,
-            iterations=iterations,
-            time_mean_ms=time_mean_ms,
-            time_min_ms=time_min_ms,
-            time_std_ms=time_std_ms,
-            compilation_time=compilation_time,
-            benchmark_time=benchmark_time,
-            err=err,
-            dict=profiler_result_dict)
+            profiler_result_dict[PROFILER_RESULT_KEYS.CONFIG_INDEX],
+            to_int_list(profiler_result_dict[PROFILER_RESULT_KEYS.TILE_SIZE]),
+            to_int_list(
+                profiler_result_dict[PROFILER_RESULT_KEYS.WORK_GROUP_SIZES]),
+            try_int(profiler_result_dict[PROFILER_RESULT_KEYS.PIPELINE_DEPTH]),
+            profiler_result_dict[PROFILER_RESULT_KEYS.PIPELINE],
+            OperationType.from_string(
+                profiler_result_dict[PROFILER_RESULT_KEYS.OPERATION]),
+            try_int(profiler_result_dict[PROFILER_RESULT_KEYS.B]),
+            try_int(profiler_result_dict[PROFILER_RESULT_KEYS.M]),
+            try_int(profiler_result_dict[PROFILER_RESULT_KEYS.N]),
+            try_int(profiler_result_dict[PROFILER_RESULT_KEYS.K]),
+            try_int(
+                profiler_result_dict[PROFILER_RESULT_KEYS.BENCHMARK_REPETITIONS]),
+            try_int(profiler_result_dict[PROFILER_RESULT_KEYS.ITERATIONS]),
+            try_float(profiler_result_dict[PROFILER_RESULT_KEYS.TIME_MEAN_MS]),
+            try_float(profiler_result_dict[PROFILER_RESULT_KEYS.TIME_MIN_MS]),
+            try_float(profiler_result_dict[PROFILER_RESULT_KEYS.TIME_STD_MS]),
+            try_float(
+                profiler_result_dict[PROFILER_RESULT_KEYS.COMPILATION_TIME_S]),
+            try_float(
+                profiler_result_dict[PROFILER_RESULT_KEYS.BENCHMARK_TIME_S]),
+            profiler_result_dict[PROFILER_RESULT_KEYS.ERROR])
 
     def set_percentage_of_peak(self, percentage_of_peak: float):
         self.profiler_result_dict[PROFILER_RESULT_KEYS.PERCENTAGE_OF_PEAK] = percentage_of_peak
@@ -257,16 +298,17 @@ class ProfilerResultsReader:
                 self.profiler_results.append(
                     ProfilerResult.create_from_dict(row_dict))
 
-        # Sort results. Separate success and failed
-        self.profiler_results.sort(
-            key=lambda profiler_result: profiler_result.profiler_result_dict[PROFILER_RESULT_KEYS.TIME_MEAN_MS])
-
+        # Separate success and failed
         def succeeded(profiler_result: ProfilerResult):
             return str(profiler_result.profiler_result_dict[PROFILER_RESULT_KEYS.ERROR]) == ""
         self.profiler_results_success = [
             profiler_result for profiler_result in self.profiler_results if succeeded(profiler_result)]
         self.profiler_results_failed = [
             profiler_result for profiler_result in self.profiler_results if not succeeded(profiler_result)]
+
+        # Sort success
+        self.profiler_results_success.sort(
+            key=lambda profiler_result: profiler_result.profiler_result_dict[PROFILER_RESULT_KEYS.TIME_MEAN_MS])
 
         peak_time_ms = float(
             self.profiler_results_success[0].profiler_result_dict[PROFILER_RESULT_KEYS.TIME_MEAN_MS])
@@ -277,7 +319,7 @@ class ProfilerResultsReader:
 
         # Separate the control from the successful profiles
         self.profiler_result_control = [
-            control for control in self.profiler_results_success if control.profiler_result_dict[PROFILER_RESULT_KEYS.OPERATION] == "default"][0]
+            control for control in self.profiler_results_success if control.profiler_result_dict[PROFILER_RESULT_KEYS.TILE_SIZE] == "default"][0]
         self.profiler_results_success.remove(self.profiler_result_control)
 
     def write_updated_results(self, csv_output_path: Path):
