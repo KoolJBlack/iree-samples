@@ -2,6 +2,10 @@ import enum
 from utils.data_types import TargetBackend
 from typing import Optional, List, Tuple
 
+###################################################################################################
+# This file contains utilities for interfacing with IREE tools.
+###################################################################################################
+
 
 @enum.unique
 class CudaFlavors(str, enum.Enum):
@@ -35,3 +39,35 @@ def iree_compile_arguments(target_backend: TargetBackend, compile_flavors: List[
 
     # Return unique arguments list
     return list(set(args))
+
+
+class BenchmarkTimeout:
+    """Class to for enforcing timeouts on benchmarks."""
+
+    def __init__(self,
+                 base_time_multiple: float = 1.15,
+                 min_benchmark_time_s: float = 10,
+                 max_benchmark_time_s: float = 20,
+                 max_tolerance: float = 1.05):
+        # min time such that we never cutoff below that (for noise)
+        # max time such that if the ratio times base time is the max time, we use that or the base time (to prevent excessively long benchmarks)
+        self.base_time_s = None
+        self.base_time_multiple = base_time_multiple
+        self.min_benchmark_time_s = min_benchmark_time_s
+        self.max_benchmark_time_s = max_benchmark_time_s
+
+    def set_base_time(self, base_time_s: float):
+        """Set base time in seconds. """
+        self.base_time_s = base_time_s
+
+    def get_time_limit(self) -> Optional[float]:
+        """Returns the benchmark timeout in seconds if possible, or none if there is no limit"""
+        if not self.base_time_s:
+            return None
+        else:
+            ratio_time_limit = self.base_time_multiple * self.base_time_s
+            if ratio_time_limit < self.min_benchmark_time_s:
+                return self.min_benchmark_time_s
+            elif ratio_time_limit > self.max_benchmark_time_s:
+                return max(self.max_benchmark_time_s, self.base_time_s * self.max_tolerance)
+            return ratio_time_limit

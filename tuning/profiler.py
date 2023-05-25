@@ -11,12 +11,12 @@ from datetime import timedelta
 from iree.compiler import CompilerToolError
 from iree.compiler.tools import core as ireec
 from iree.runtime import benchmark_module
-from iree.runtime.benchmark import BenchmarkResult, BenchmarkToolError
+from iree.runtime.benchmark import BenchmarkResult, BenchmarkToolError, BenchmarkTimeoutError
 import iree.runtime as ireert
 
 from model.config_generation import generate_configs
 from utils.data_types import TargetBackend, TargetDevice, TargetDriver, CompilerFrontend, CompilationResult, DispatchConfig, Dispatch, DEFAULT_CONFIG, Pipeline, OperationType, DataType
-from utils.iree_utils import CudaFlavors, iree_compile_arguments
+from utils.iree_utils import CudaFlavors, iree_compile_arguments, BenchmarkTimeout
 from model.model_generator import generate_model
 from results.results import ProfilerResult, ProfilerResultsWriter
 
@@ -107,7 +107,9 @@ def run_benchmark_module(
         device: TargetDevice = TargetDevice.CUDA,
         driver: TargetDriver = TargetDriver.CUDA,
         benchmark_repetitions: Optional[int] = None,
-        benchmark_dispatch_batch_size: Optional[int] = None) -> Tuple[List[BenchmarkResult], Optional[BenchmarkToolError]]:
+        benchmark_dispatch_batch_size: Optional[int] = None,
+        benchmark_min_time: Optional[float] = None,
+        benchmark_timeout_s=Optional[float]) -> Tuple[List[BenchmarkResult], Optional[BenchmarkToolError]]:
     # Create a module
     config = ireert.Config(driver_name=driver)
     vm_module = ireert.VmModule.from_flatbuffer(
@@ -117,9 +119,15 @@ def run_benchmark_module(
 
     try:
         benchmark_results = benchmark_module(
-            vm_module, device=device, benchmark_repetitions=benchmark_repetitions, batch_size=benchmark_dispatch_batch_size)
+            vm_module,
+            timeout=benchmark_timeout_s,
+            device=device,
+            benchmark_repetitions=benchmark_repetitions,
+            batch_size=benchmark_dispatch_batch_size,
+            benchmark_min_time=benchmark_min_time,
+        )
         return benchmark_results, None
-    except BenchmarkToolError as err:
+    except (BenchmarkToolError, BenchmarkTimeoutError) as err:
         flatbuffer_blob = None
         print(f"Benchmark tool failed: {err}")
         return None, err
@@ -144,6 +152,7 @@ def run_profile(
         output_csv_path: Path,
         benchmark_repetitions: int,
         benchmark_dispatch_batch_size: int,
+        benchmark_min_time: float,
         pipeline: Pipeline,
         operation_type: OperationType,
         extra_compilation_args: List[str] = [],
@@ -202,6 +211,8 @@ def run_profile(
 
     tuning_start_time_s = time.time()
 
+    benchmark_timeout = BenchmarkTimeout()
+
     for group_index, config_group in enumerate(grouped_configs):
         for index, config in enumerate(config_group):
             config_index = group_index * compilation_parallelism + \
@@ -225,8 +236,9 @@ def run_profile(
             if not compilation_result.flatbuffer_blob:
                 print(f"Failed to compile {config_index}/{config_count}")
                 tuning_elapsed_time_s = time.time() - tuning_start_time_s
+                tuning_average_time_s = tuning_elapsed_time_s/(config_index+1)
                 print(
-                    f"Profiled config {config_index}/{config_count} - total elapsed time: {timedelta(seconds=tuning_elapsed_time_s)}, compilation time: {compilation_result.compilation_time_s:0.4f}sec")
+                    f"Profiled config {config_index}/{config_count} - total elapsed time: {timedelta(seconds=tuning_elapsed_time_s)}, average time: {timedelta(seconds=tuning_average_time_s)}, compilation time: {compilation_result.compilation_time_s:0.4f}sec")
                 profiler_results.append(
                     ProfilerResult.create_with_err(
                         config_index,
@@ -241,17 +253,23 @@ def run_profile(
             benchmark_start_time_s = time.time()
 
             # Benchmark model
-            benchmark_results, benchmark_err = run_benchmark_module(compilation_result.flatbuffer_blob, entry_function="forward",
-                                                                    benchmark_repetitions=benchmark_repetitions, benchmark_dispatch_batch_size=benchmark_dispatch_batch_size)
+            benchmark_results, benchmark_err = run_benchmark_module(
+                compilation_result.flatbuffer_blob,
+                entry_function="forward",
+                benchmark_repetitions=benchmark_repetitions,
+                benchmark_dispatch_batch_size=benchmark_dispatch_batch_size,
+                benchmark_min_time=benchmark_min_time,
+                benchmark_timeout_s=benchmark_timeout.get_time_limit())
 
             benchmark_elapsed_time_s = time.time() - benchmark_start_time_s
             tuning_elapsed_time_s = time.time() - tuning_start_time_s
+            tuning_average_time_s = tuning_elapsed_time_s/(config_index+1)
 
             # Was benchmark successful?
             if benchmark_err:
                 print(f"Failed to benchmark {config_index}/{config_count}")
 
-                print(f"Profiled config {config_index}/{config_count} - total elapsed time: {timedelta(seconds=tuning_elapsed_time_s)}, compilation time: {compilation_result.compilation_time_s:0.4f}sec, benchmark time: {benchmark_elapsed_time_s:0.4f}sec")
+                print(f"Profiled config {config_index}/{config_count} - total elapsed time: {timedelta(seconds=tuning_elapsed_time_s)}, average time: {timedelta(seconds=tuning_average_time_s)}, compilation time: {compilation_result.compilation_time_s:0.4f}sec, benchmark time: {benchmark_elapsed_time_s:0.4f}sec")
                 profiler_results.append(
                     ProfilerResult.create_with_err(
                         config_index,
@@ -262,6 +280,8 @@ def run_profile(
                         benchmark_err))
                 benchmark_results_writer.write_csv_result(profiler_results[-1])
             else:
+                if config == DEFAULT_CONFIG:
+                    benchmark_timeout.set_base_time(benchmark_elapsed_time_s)
                 print(
                     f"Profiled config {config_index}/{config_count} - total elapsed time: {timedelta(seconds=tuning_elapsed_time_s)}, compilation time: {compilation_result.compilation_time_s:0.4f}sec, benchmark time: {benchmark_elapsed_time_s:0.4f}sec with {benchmark_results[0].iterations} iterations")
                 profiler_results.append(

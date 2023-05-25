@@ -5,9 +5,6 @@ import json
 
 ###################################################################################################
 # This file contains library of enumerations and classes used to build operation descritpions.
-
-# The file is organized as follows:
-# 1. Enumerated `Type`s
 ###################################################################################################
 
 # Base Types
@@ -27,7 +24,7 @@ class DataType(enum.Enum):
 
     @staticmethod
     def from_string(s: str):
-        try: 
+        try:
             return DataType[s.capitalize()]
         except KeyError:
             raise ValueError()
@@ -113,6 +110,7 @@ class OperationType(str, enum.Enum):
     def __str__(self):
         return self.name
 
+
 @dataclass
 class Dispatch:
     pipeline_name: Pipeline
@@ -138,16 +136,13 @@ class DefaultConfig:
     def __init__(self):
         self.pipeline_name = "default"
         self.operation = "default"
-        self.tile_size = "[default]"
-        self.workgroup_size = "[default]"
+        self.tile_size = "default"
+        self.workgroup_size = "default"
         self.pipeline_depth = "default"
-        self.b = "default"
-        self.m = "default"
-        self.n = "default"
-        self.k = "default"
-    
+
     def __repr__(self) -> str:
         return "DEFAULT_CONFIG"
+
 
 """A blank control config that does not annotate the model."""
 DEFAULT_CONFIG = DefaultConfig()
@@ -200,7 +195,7 @@ class ProfilerProgram:
             data_type = DataType.F32
         else:
             raise RuntimeError("Unknown data type")
-        
+
         operation_type = None
         if json_dict["operation_type"] == OperationType.MATMUL.value:
             operation_type = OperationType.MATMUL
@@ -208,7 +203,7 @@ class ProfilerProgram:
             operation_type = OperationType.BATCH_MATMUL
         else:
             raise RuntimeError("Unknown operation type")
-        
+
         target_backend = TargetBackend.CUDA
         if json_dict["target_backend"] != TargetBackend.CUDA.value:
             raise ValueError("Only target backend CUDA supported")

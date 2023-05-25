@@ -18,7 +18,8 @@ def run_program(
         input_program_path: Path,
         results_dir_path: Path,
         benchmark_repetitions: int,
-        benchmark_dispatch_batch_size: int):
+        benchmark_dispatch_batch_size: int,
+        benchmark_min_time: float):
     """Run profiler programs from file."""
 
     profiler_programs = []
@@ -53,6 +54,7 @@ def run_program(
             output_csv_path=output_csv_path,
             benchmark_repetitions=benchmark_repetitions,
             benchmark_dispatch_batch_size=benchmark_dispatch_batch_size,
+            benchmark_min_time = benchmark_min_time,
             pipeline=profiler_program.pipeline,
             operation_type=profiler_program.operation_type)
         print(f"Finished tuning dispatch: {profiler_program.name}")
@@ -81,6 +83,11 @@ def parse_arguments():
                         help="Number of iterations for each dispatch in benchmark",
                         required=False,
                         default=200)
+    parser.add_argument("--benchmark_min_time",
+                        type=float,
+                        help="Minimum length of each benchmark run in seconds.",
+                        required=False,
+                        default=3.0)
     return parser.parse_args()
 
 
@@ -89,7 +96,8 @@ def main(args: argparse.ArgumentParser):
         args.input_program,
         args.results_dir,
         args.benchmark_repetitions,
-        args.benchmark_dispatch_batch_size)
+        args.benchmark_dispatch_batch_size,
+        args.benchmark_min_time)
 
 
 if __name__ == "__main__":
