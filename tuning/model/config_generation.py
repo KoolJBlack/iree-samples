@@ -43,7 +43,8 @@ def generate_workgroup_sizes(pipeline: Pipeline, input_shape: List[int], tile_si
         # Tensorcore main dims X, Y, Z
         def to_threads(warp):
             return warp * 32
-        tensorcore_x_sizes = list(map(to_threads, [1, 2, 4, 8, 16]))
+        # tensorcore_x_sizes = list(map(to_threads, [1, 2, 4, 8, 16]))
+        tensorcore_x_sizes = list(map(to_threads, [1, 2, 4, 8]))
         tensorcore_y_sizes = [1, 2, 4]
         # For tensorcore, workgroup Z is always 1
         tensorcore_z_sizes = [1]

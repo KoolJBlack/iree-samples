@@ -90,7 +90,8 @@ def dump_profile_programs(input_mlir_model: Path,
 
 def combine_programs(
         input_program_dir: Path,
-        output_program_path: Path):
+        output_program_path: Path,
+        annotate_source: bool = True):
     """Combines input programs from a dir into a single output program. Removes duplicate programs."""
 
     raw_program_count = 0
@@ -115,11 +116,15 @@ def combine_programs(
                     continue
 
                 profiler_programs_dict[program_name] = profiler_program
-                profiler_programs_list.append(profiler_program)
+                profiler_programs_list.append((profiler_program, child.name))
 
     # Dump the profiler programs
+    last_source_name = None
     with open(output_program_path, "w") as f:
-        for profiler_program in profiler_programs_list:
+        for profiler_program, source_name in profiler_programs_list:
+            if last_source_name != source_name:
+                f.write("\n#" + source_name + "\n")
+                last_source_name = source_name
             json_str = profiler_program.dump_json()
             f.write(json_str + "\n")
 

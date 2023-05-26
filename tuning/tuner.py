@@ -28,6 +28,9 @@ def run_program(
             line = f.readline().rstrip()
             if not line:
                 break
+            # Ignore empty or commented program lines
+            if line == "" or line[0] == "#":
+                continue
             profiler_programs.append(ProfilerProgram.load_json(line))
 
     print(

@@ -24,6 +24,8 @@ def assemble_shark_config_object(
 
     if pipeline == Pipeline.GPU_TENSORCORE:
         pipeline_name = "GPU_TENSORCORE"
+    elif pipeline == Pipeline.GPU_TENSORCORE_MMASYNC:
+        pipeline_name = "GPU_TENSORCORE_MMASYNC"
     elif operation == Pipeline.GPU_SIMT:
         pipeline = "GPU_SIMT"
     else: 
