@@ -124,18 +124,19 @@ class Dispatch:
 
 @dataclass
 class DispatchConfig:
-    pipeline_name: Pipeline
-    operation: OperationType
     tile_size: List[int]
     workgroup_size: List[int]
     pipeline_depth: int
+
+    def __post_init__(self):
+        # Ensure workgroup size is in threads not warps. 
+        if self.workgroup_size[0] < 32:
+            self.workgroup_size[0] *= 32
 
 
 class DefaultConfig:
 
     def __init__(self):
-        self.pipeline_name = "default"
-        self.operation = "default"
         self.tile_size = "default"
         self.workgroup_size = "default"
         self.pipeline_depth = "default"

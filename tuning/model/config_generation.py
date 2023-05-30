@@ -188,8 +188,6 @@ def generate_cuda_configs(dispatch: Dispatch) -> List[DispatchConfig]:
         for workgroup_size in workgroup_sizes:
             for pipeline_depth in pipeline_depths:
                 dispatch_config = DispatchConfig(
-                    pipeline_name=pipeline,
-                    operation=operation,
                     tile_size=tile_size,
                     workgroup_size=workgroup_size,
                     pipeline_depth=pipeline_depth,

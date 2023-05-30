@@ -46,7 +46,7 @@ def generate_model(dispatch: Dispatch, config: Optional[DispatchConfig]):
     compilation_info_tag = ""
     if config:
         compilation_info = COMPILATION_INFO_TEMPLATE.format(
-            pipeline=config.pipeline_name.value,
+            pipeline=dispatch.pipeline_name.value,
             tile_size=list(config.tile_size),
             pipeline_depth=config.pipeline_depth,
             workgroup_x=config.workgroup_size[0],
