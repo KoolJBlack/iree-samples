@@ -202,6 +202,91 @@ def generate_cuda_configs(dispatch: Dispatch) -> List[DispatchConfig]:
     #         pipeline_depth=4 
     #         )
     # ]
+ 
+    configs = []
+
+    # CUTLASS f32 configs: https://github.com/NVIDIA/cutlass/blob/main/tools/library/scripts/generator.py#L2544
+    configs.extend([ 
+      DispatchConfig(tile_size=[256, 128, 16], pipeline_depth= 3, workgroup_size=[4, 2, 1]),
+      DispatchConfig(tile_size=[128, 256, 16], pipeline_depth= 3, workgroup_size=[2, 4, 1]),
+      DispatchConfig(tile_size=[256,  64, 16], pipeline_depth= 4, workgroup_size=[4, 1, 1]),
+      DispatchConfig(tile_size=[ 64, 256, 16], pipeline_depth= 4, workgroup_size=[1, 4, 1]),
+      DispatchConfig(tile_size=[128, 128, 16], pipeline_depth= 5, workgroup_size=[2, 2, 1]),
+      DispatchConfig(tile_size=[128, 128, 16], pipeline_depth= 4, workgroup_size=[2, 2, 1]),
+      DispatchConfig(tile_size=[128, 128, 16], pipeline_depth= 3, workgroup_size=[2, 2, 1]),
+      DispatchConfig(tile_size=[128,  64, 16], pipeline_depth= 6, workgroup_size=[2, 2, 1]),
+      DispatchConfig(tile_size=[ 64, 128, 16], pipeline_depth= 6, workgroup_size=[2, 2, 1]),
+      DispatchConfig(tile_size=[ 64,  64, 16], pipeline_depth=10, workgroup_size=[2, 2, 1]),
+      DispatchConfig(tile_size=[256, 128, 32], pipeline_depth= 3, workgroup_size=[4, 2, 1]),
+      DispatchConfig(tile_size=[128, 256, 32], pipeline_depth= 3, workgroup_size=[2, 4, 1]),
+      DispatchConfig(tile_size=[256,  64, 32], pipeline_depth= 4, workgroup_size=[4, 1, 1]),
+      DispatchConfig(tile_size=[ 64, 256, 32], pipeline_depth= 4, workgroup_size=[1, 4, 1]),
+      DispatchConfig(tile_size=[128, 128, 32], pipeline_depth= 4, workgroup_size=[2, 2, 1]),
+      DispatchConfig(tile_size=[128, 128, 32], pipeline_depth= 3, workgroup_size=[2, 2, 1]),
+      DispatchConfig(tile_size=[128,  64, 32], pipeline_depth= 3, workgroup_size=[2, 2, 1]),
+      DispatchConfig(tile_size=[64,  128, 32], pipeline_depth= 3, workgroup_size=[2, 2, 1]),
+      DispatchConfig(tile_size=[ 64,  64, 32], pipeline_depth= 5, workgroup_size=[2, 2, 1]),
+    ])
+
+    # CUTLASS f16 configs: https://github.com/NVIDIA/cutlass/blob/main/tools/library/scripts/generator.py#L1908
+    configs.extend([ 
+      DispatchConfig(tile_size=[256, 128, 32], pipeline_depth= 3, workgroup_size=[4, 2, 1]),
+      DispatchConfig(tile_size=[128, 256, 32], pipeline_depth= 3, workgroup_size=[2, 4, 1]),
+      DispatchConfig(tile_size=[256,  64, 32], pipeline_depth= 3, workgroup_size=[4, 1, 1]),
+      DispatchConfig(tile_size=[256,  64, 32], pipeline_depth= 4, workgroup_size=[4, 1, 1]),
+      DispatchConfig(tile_size=[ 64, 256, 32], pipeline_depth= 4, workgroup_size=[1, 4, 1]),
+      DispatchConfig(tile_size=[128, 128, 32], pipeline_depth= 3, workgroup_size=[2, 2, 1]),
+      DispatchConfig(tile_size=[128, 128, 32], pipeline_depth= 4, workgroup_size=[2, 2, 1]),
+      DispatchConfig(tile_size=[128, 128, 32], pipeline_depth= 5, workgroup_size=[2, 2, 1]),
+      DispatchConfig(tile_size=[128,  64, 32], pipeline_depth= 6, workgroup_size=[2, 2, 1]),
+      DispatchConfig(tile_size=[ 64, 128, 32], pipeline_depth= 6, workgroup_size=[2, 2, 1]),
+      DispatchConfig(tile_size=[ 64,  64, 32], pipeline_depth=10, workgroup_size=[2, 2, 1]),
+      DispatchConfig(tile_size=[256, 128, 64], pipeline_depth= 3, workgroup_size=[4, 2, 1]),
+      DispatchConfig(tile_size=[128, 256, 64], pipeline_depth= 3, workgroup_size=[2, 4, 1]),
+      DispatchConfig(tile_size=[256,  64, 64], pipeline_depth= 4, workgroup_size=[4, 1, 1]),
+      DispatchConfig(tile_size=[ 64, 256, 64], pipeline_depth= 4, workgroup_size=[1, 4, 1]),
+      DispatchConfig(tile_size=[128, 128, 64], pipeline_depth= 4, workgroup_size=[2, 2, 1]),
+      DispatchConfig(tile_size=[256,  64, 64], pipeline_depth= 3, workgroup_size=[4, 1, 1]),
+      DispatchConfig(tile_size=[ 64, 256, 64], pipeline_depth= 3, workgroup_size=[1, 4, 1]),
+      DispatchConfig(tile_size=[128, 128, 64], pipeline_depth= 3, workgroup_size=[2, 2, 1]),
+      DispatchConfig(tile_size=[128,  64, 64], pipeline_depth= 3, workgroup_size=[2, 2, 1]),
+      DispatchConfig(tile_size=[ 64, 128, 64], pipeline_depth= 3, workgroup_size=[2, 2, 1]),
+      DispatchConfig(tile_size=[ 64,  64, 64], pipeline_depth= 5, workgroup_size=[2, 2, 1]),
+    ])
+
+    # Triton configs: https://github.com/openai/triton/blob/b5d32896b1f89fc44a82f8df3bb010934c53f4f5/python/triton/ops/matmul.py#L29
+    configs.extend([
+        DispatchConfig([128, 256, 32], pipeline_depth=3,  workgroup_size=[8, 1, 1]),
+        DispatchConfig([256, 128, 32], pipeline_depth=3,  workgroup_size=[8, 1, 1]),
+        DispatchConfig([256, 64, 32], pipeline_depth=4,  workgroup_size=[4, 1, 1]),
+        DispatchConfig([64, 256, 32], pipeline_depth=4,  workgroup_size=[4, 1, 1]),
+        DispatchConfig([128, 128, 32], pipeline_depth=4,  workgroup_size=[4, 1, 1]),
+        DispatchConfig([128, 64, 32], pipeline_depth=4,  workgroup_size=[4, 1, 1]),
+        DispatchConfig([64, 128, 32], pipeline_depth=4,  workgroup_size=[4, 1, 1]),
+        DispatchConfig([128, 32, 32], pipeline_depth=4,  workgroup_size=[4, 1, 1]),
+        DispatchConfig([64, 32, 32], pipeline_depth=5,  workgroup_size=[2, 1, 1]),
+        # good for int8
+        DispatchConfig([128, 256, 128], pipeline_depth=3,  workgroup_size=[8, 1, 1]),
+        DispatchConfig([256, 128, 128], pipeline_depth=3,  workgroup_size=[8, 1, 1]),
+        DispatchConfig([256, 64, 128], pipeline_depth=4,  workgroup_size=[4, 1, 1]),
+        DispatchConfig([64, 256, 128], pipeline_depth=4,  workgroup_size=[4, 1, 1]),
+        DispatchConfig([128, 128, 128], pipeline_depth=4,  workgroup_size=[4, 1, 1]),
+        DispatchConfig([128, 64, 64], pipeline_depth=4,  workgroup_size=[4, 1, 1]),
+        DispatchConfig([64, 128, 64], pipeline_depth=4,  workgroup_size=[4, 1, 1]),
+        DispatchConfig([128, 32, 64], pipeline_depth=4,  workgroup_size=[4, 1, 1]),
+        DispatchConfig([64, 32, 64], pipeline_depth=5,  workgroup_size=[2, 1, 1]),
+    ])
+
+    # For batch matmul, update tile size.
+    if dispatch.b:
+        for config in configs:
+            config.tile_size.insert(0, 1)
+
+    print(f"Total custom configs: {len(configs)}")
+    unique_configs_set = set(configs)
+    configs = list(unique_configs_set)
+    print(f"Unique custom configs (before filter): {len(configs)}")
+
     configs = [dispatch_config for dispatch_config in configs if cuda_tensorcore_verify(dispatch, dispatch_config)]
     configs = [dispatch_config for dispatch_config in configs if cuda_tensorcore_prune(dispatch, dispatch_config)]
     return configs

@@ -132,6 +132,20 @@ class DispatchConfig:
         # Ensure workgroup size is in threads not warps. 
         if self.workgroup_size[0] < 32:
             self.workgroup_size[0] *= 32
+   
+    def __eq__(self, other):
+        if not isinstance(other, DispatchConfig): 
+            return False
+        if self.pipeline_depth != other.pipeline_depth:
+            return False
+        if set(self.tile_size) != set(other.tile_size):
+            return False
+        if set(self.workgroup_size) != set(other.workgroup_size):
+            return False
+        return True
+
+    def __hash__(self):
+        return hash(str(self.tile_size)) + hash(str(self.workgroup_size)) + self.pipeline_depth
 
 
 class DefaultConfig:
